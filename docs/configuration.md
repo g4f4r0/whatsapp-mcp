@@ -26,7 +26,8 @@ All configuration is environment variables. The production values live in `deplo
 | `NTFY_TOPIC_URL` | _(unset)_ | ntfy.sh topic URL; unset = notifications disabled |
 | `NTFY_TOKEN` | _(unset)_ | Bearer token for protected ntfy topics |
 | `EXPECTED_WA_NUMBER` | _(unset)_ | If set, only pairings whose JID starts with this prefix are accepted. A mismatch triggers `socket.logout()`, purges `auth_info/`, and fires an ntfy alert. Critical when the QR page is publicly reachable. |
-| `S3_ENABLED` | `false` | Set to `true` to enable the S3-compatible media plane. Required for `download_media` to work in remote deployments. Prod uses RustFS running as a sidecar in the same compose stack — no managed cloud, no extra bill. |
+| `MEDIA_STORAGE` | `local` | Where `download_media` stores bytes: `local` (default — `<WHATSAPP_MCP_DATA_DIR>/media/<chat_jid>/<message_id>.<ext>`, owner-only permissions) or `s3` (the plane below). |
+| `S3_ENABLED` | `false` | Set to `true` to enable the S3-compatible media plane (also requires `MEDIA_STORAGE=s3`). Prod uses RustFS running as a sidecar in the same compose stack — no managed cloud, no extra bill. |
 | `S3_ENDPOINT` | `localhost` | S3 endpoint hostname (dev/prod: `minio` (runs RustFS; service name kept for DNS compat) — service name on the docker network). |
 | `S3_PORT` | `9000` | Port for the S3 endpoint. Always `9000` for the RustFS sidecar. |
 | `S3_USE_SSL` | `false` | Always `false` — Traefik terminates TLS in front of RustFS; the app talks to RustFS in-cluster over HTTP. |
@@ -43,12 +44,30 @@ All configuration is environment variables. The production values live in `deplo
 | `SEND_BLOCKLIST_ENABLED`, `SEND_COLD_CONTACT_GUARD`, `SEND_COLD_OVERRIDE`, `SEND_COLD_ALLOWED_JIDS`, `SEND_RATE_LIMIT_*`, `SEND_SIMULATE_TYPING`, `SEND_TYPING_MAX_MS` | see doc | The anti-ban guard chain. Defaults, effects and the per-instance policy: **[`account-restrictions.md`](./account-restrictions.md)**. These are risk-owner settings — don't change one to make a send go through. |
 | `HEALTH_DISCONNECTED_GRACE_S` | `300` | How long the WhatsApp socket may be disconnected before `/health` returns 503. Guards against the failure where the container reported `healthy` through a 21-hour outage. |
 | `OPENROUTER_API_KEY` | _(unset)_ | Enables `download_media`'s `transcribe` (Whisper `openai/whisper-large-v3`, the default audio route) and `describe` (vision model) flags. |
-| `AUDIO_PROVIDER` | `openrouter` | Transcription route: `openrouter` \| `groq` \| `openai`. Rollback lanes kept deliberately; an unknown value throws rather than silently guessing. **Routing is never by key presence** — a leftover `GROQ_API_KEY` must not quietly keep traffic on a closed account. |
+| `AUDIO_PROVIDER` | `openrouter` | Transcription route: `openrouter` \| `groq` \| `openai` \| `bb`. Rollback lanes kept deliberately; an unknown value throws rather than silently guessing. **Routing is never by key presence** — a leftover `GROQ_API_KEY` must not quietly keep traffic on a closed account. |
+| `BB_BIN_PATH` | _(unset)_ | Path to the `bb` CLI. Required when `AUDIO_PROVIDER=bb`: transcribes through `bb voice transcribe` instead of an HTTP Whisper provider, so no provider API key needs to reach this process. Skips the FLAC/16kHz preprocessing step. The transcript is cached next to the audio (`<message_id>.txt`) so a voice note is only ever transcribed once. |
 | `GROQ_API_KEY` | _(unset)_ | Only used when `AUDIO_PROVIDER=groq` (rollback; `whisper-large-v3`). |
 | `OPENAI_API_KEY` | _(unset)_ | Only used when `AUDIO_PROVIDER=openai` (rollback; `whisper-1`). |
-| `WHISPER_MODEL` | _(per-route default)_ | Override the Whisper model on whichever route is active. |
+| `WHISPER_MODEL` | _(per-route default)_ | Override the Whisper model on whichever route is active (`openrouter`/`groq`/`openai` only). |
 | `VISION_MODEL` | `openai/gpt-6-luna` | OpenRouter model id used by `download_media`'s `describe` flag. Any image-input model works. |
 | `FFMPEG_BIN` | `ffmpeg` | Path to the ffmpeg binary used for audio preprocessing before Whisper. |
+
+## Multi-account gateway
+
+`pnpm start` runs a single account. `pnpm start:gateway` (`src/gateway-main.ts`) instead runs
+one gateway process that fronts every account configured under
+`WHATSAPP_MCP_ACCOUNTS_DIR` (default `~/.config/whatsapp-mcp/accounts`, one `<account>.env`
+per account — same `EXPECTED_WA_NUMBER`/`MCP_PORT`/`QR_SERVER_PORT`/`STREAM_SERVER_PORT`
+format as before). Each account still runs as its own child process (this same `src/main.ts`,
+unchanged) on its already-assigned, loopback-only port block; the gateway is the only thing
+those ports are exposed to. Every tool gets a required `account` parameter, plus a
+gateway-native `list_accounts` tool. Pairing pages are served at `/qr/<account>` on one port.
+Additional gateway env vars: `WHATSAPP_MCP_DATA_ROOT` (default
+`~/.local/share/whatsapp-mcp`, holding each account's existing `<name>/` subdir),
+`WHATSAPP_MCP_GATEWAY_LOG_DIR` (default: same as the data root). `MCP_PORT`/`MCP_HOST` and
+`QR_SERVER_PORT`/`QR_SERVER_HOST` on the gateway itself default to `39090`/`39091` rather than
+the single-account `39001`/`39002`, since those are now taken by the first account's internal
+child ports. See `src/gateway/server.ts`.
 
 ## Data storage
 
@@ -62,7 +81,13 @@ Paths are relative to `WHATSAPP_MCP_DATA_DIR` (defaults to `.` when running via 
 - `wa-logs.txt` - WhatsApp/Baileys logs
 - `mcp-logs.txt` - MCP server logs
 
-> **Media**: downloaded media is stored in a RustFS sidecar in the same compose stack (bind-mounted at `/storage/whatsapp-mcp/minio` in the production compose). It is served publicly through Traefik at `https://mcp.example.com/media/<key>` — no separate subdomain, no managed cloud bucket, no recurring bill. The legacy `data/media/` directory existed in older deployments — run `scripts/backfill-media.sh` inside the container to upload existing files into RustFS; the script then drops the legacy column.
+> **Media**: by default (`MEDIA_STORAGE=local`) downloaded media stays on disk at
+> `<WHATSAPP_MCP_DATA_DIR>/media/<chat_jid>/<message_id>.<ext>` — no S3-compatible sidecar
+> needed. Set `MEDIA_STORAGE=s3` (and `S3_ENABLED=true`) to opt back into a RustFS/MinIO plane:
+> it's stored in the same compose stack (bind-mounted at `/storage/whatsapp-mcp/minio` in the
+> production compose) and served publicly through Traefik at `https://mcp.example.com/media/<key>`.
+> The legacy `data/media/` directory existed in older deployments — run `scripts/backfill-media.sh`
+> inside the container to upload existing files into RustFS; the script then drops the legacy column.
 
 All data directories are gitignored for security.
 
@@ -75,7 +100,7 @@ boot). There is no migration runner, so a new table or column must be declared i
 | Table | Holds |
 |---|---|
 | `chats` | One row per chat JID, with name and `last_message_time` |
-| `messages` | Primary key `(id, chat_jid)`. Text content plus media metadata (`media_type`, `mimetype`, `media_key`, `direct_path`, `file_length`, hashes) and `media_object_key` once the media has been copied to S3 (`t/{tenantId}/{sanitizedJid}/{msgId}.{ext}`) |
+| `messages` | Primary key `(id, chat_jid)`. Text content plus media metadata (`media_type`, `mimetype`, `media_key`, `direct_path`, `file_length`, hashes) and `media_object_key` once downloaded — a local filesystem path under `MEDIA_STORAGE=local` (default), or the S3 object key (`t/{tenantId}/{sanitizedJid}/{msgId}.{ext}`) under `MEDIA_STORAGE=s3` |
 | `contacts` | JID, saved name, push name (`notify`), phone number |
 | `jid_aliases` | Maps phone-number JIDs and `@lid` JIDs of the same person to one `canonical_jid`, so filters and guards cannot be bypassed by a PN/LID mismatch |
 | `webhook_subscriptions` | Outbound webhook registrations — see [`webhooks.md`](./webhooks.md) |

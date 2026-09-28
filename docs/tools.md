@@ -67,7 +67,7 @@ The send path is guarded three ways — see [`send-guards.md`](./send-guards.md)
 
 | Param | Default | Behavior |
 |---|---|---|
-| `transcribe` | `true` for `audio`/`ptt` messages, ignored otherwise | Preprocess bytes with ffmpeg (16 kHz mono FLAC, ~10× smaller), call Whisper `openai/whisper-large-v3` via **OpenRouter**, return an `<transcription>` XML block instead of `audioContent`. Route is chosen by `AUDIO_PROVIDER` (`openrouter` default, `groq`/`openai` rollback lanes) — never by which key is set. |
+| `transcribe` | `true` for `audio`/`ptt` messages, ignored otherwise | Preprocess bytes with ffmpeg (16 kHz mono FLAC, ~10× smaller), call Whisper `openai/whisper-large-v3` via **OpenRouter**, return an `<transcription>` XML block instead of `audioContent`. Route is chosen by `AUDIO_PROVIDER` (`openrouter` default, `groq`/`openai` rollback lanes, `bb` shells out to `bb voice transcribe` and skips the FLAC preprocessing step) — never by which key is set. The transcript is cached next to the audio (`<message_id>.txt`), so a repeat call reuses it instead of transcribing again. |
 | `describe` | `false` always, ignored on non-image media | Send the image (base64 data URL) to an OpenRouter chat-completions vision model — `openai/gpt-6-luna` unless `VISION_MODEL` says otherwise — and return an `<image_description>` XML block instead of `imageContent`. |
 
 Output shape (single `text` content block alongside the usual `resource_link` + JSON metadata):

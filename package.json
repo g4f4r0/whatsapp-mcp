@@ -18,6 +18,7 @@
   },
   "scripts": {
     "start": "node --experimental-strip-types src/main.ts",
+    "start:gateway": "node --experimental-strip-types src/gateway-main.ts",
     "typecheck": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",

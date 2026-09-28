@@ -17,6 +17,7 @@ You want your personal WhatsApp account reachable as a set of tools from **Claud
 - **Bad-pairing protection** — if someone else scans the public QR, the app auto-logs out and purges credentials (`EXPECTED_WA_NUMBER`)
 - **23 MCP tools** — search contacts/messages, list chats, send text/media, react, delete, mark read, download media, plus reactive monitoring (cursor delta, long-poll, a `follow_chat` WebSocket stream) and webhook subscriptions for real-time inbound push (see table below)
 - **Persistent SQLite** (chats/messages/contacts) and Baileys multi-file auth stored in a Docker volume
+- **Optional multi-account gateway** (`pnpm start:gateway`) — one MCP server fronting several WhatsApp accounts, each still its own isolated process (own socket, DB, send limits); every tool takes a required `account`. See [`docs/configuration.md`](./docs/configuration.md#multi-account-gateway).
 
 ## Architecture
 
@@ -157,15 +158,16 @@ Full table: [`docs/configuration.md`](./docs/configuration.md). Highlights:
 | `EXPECTED_WA_NUMBER` | Prefix allowed to pair; wrong scan → auto-logout + purge (strongly recommended whenever the QR page is public) |
 | `WHATSAPP_MCP_DATA_DIR` | Base dir for `auth_info/`, `data/`, and logs (defaults to `.`, Docker uses `/data`) |
 | `OPENROUTER_API_KEY` | Powers `download_media` audio transcription (Whisper) and image description (vision model) |
-| `AUDIO_PROVIDER` | Transcription route: `openrouter` (default) \| `groq` \| `openai`. Rollback lanes only — the route is chosen by this var, never by which key happens to be set |
+| `AUDIO_PROVIDER` | Transcription route: `openrouter` (default) \| `groq` \| `openai` \| `bb` (shells out to `bb voice transcribe`, no provider key needed). The route is chosen by this var, never by which key happens to be set |
 | `VISION_MODEL` | OpenRouter model for image description (default `openai/gpt-6-luna`) |
+| `MEDIA_STORAGE` | `local` (default) — `<WHATSAPP_MCP_DATA_DIR>/media/<chat_jid>/<message_id>.<ext>`, no sidecar needed — or `s3` |
 
 ## Data storage & privacy
 
 - **Credentials**: `WHATSAPP_MCP_DATA_DIR/auth_info/` (Baileys multi-file auth state)
 - **Messages / chats / contacts**: `WHATSAPP_MCP_DATA_DIR/data/whatsapp.db` (SQLite via Drizzle + `better-sqlite3`)
-- **Media**: served from a RustFS sidecar in the same compose stack, behind Traefik at `https://mcp.example.com/media/<key>`. The `download_media` tool returns an MCP `resource_link` pointing at that URL (publicly fetchable, no Bearer needed) plus inline `imageContent`/`audioContent` on the first call. Cache hits return the URL only.
-- **Audio → text**: by default, `download_media` on an audio/ptt message transcribes via OpenRouter Whisper (`openai/whisper-large-v3`) after preprocessing to 16 kHz mono FLAC. The response is wrapped in an `<transcription>` XML block. Pass `transcribe: false` to get raw audio bytes instead. Requires `OPENROUTER_API_KEY`. Groq and OpenAI remain as rollback routes via `AUDIO_PROVIDER` (each needs its own key).
+- **Media**: local by default (`<WHATSAPP_MCP_DATA_DIR>/media/<chat_jid>/<message_id>.<ext>`, owner-only permissions). Set `MEDIA_STORAGE=s3` to serve it from a RustFS/MinIO sidecar instead, behind Traefik at `https://mcp.example.com/media/<key>`. The `download_media` tool returns an MCP `resource_link` plus inline `imageContent`/`audioContent` on the first call; cache hits reuse the same file.
+- **Audio → text**: by default, `download_media` on an audio/ptt message transcribes via OpenRouter Whisper (`openai/whisper-large-v3`) after preprocessing to 16 kHz mono FLAC. The response is wrapped in an `<transcription>` XML block, cached next to the audio (`<message_id>.txt`) so a voice note is only ever transcribed once. Pass `transcribe: false` to get raw audio bytes instead. Requires `OPENROUTER_API_KEY`. Groq and OpenAI remain as rollback routes via `AUDIO_PROVIDER` (each needs its own key); `AUDIO_PROVIDER=bb` routes through the host's `bb voice transcribe` CLI instead, with no provider key at all.
 - **Image → text**: opt-in via `download_media({ ..., describe: true })`. Sends the image to an OpenRouter vision model (`VISION_MODEL`, default `openai/gpt-6-luna`); response wrapped in an `<image_description>` XML block. Requires `OPENROUTER_API_KEY`.
 - **Logs**: `WHATSAPP_MCP_DATA_DIR/{wa,mcp}-logs.txt` (pino JSON lines)
 

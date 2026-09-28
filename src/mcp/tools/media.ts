@@ -9,7 +9,7 @@ export function registerMediaTools(server: ToolRegistrar, deps: ToolDeps): void 
   server.addTool({
     name: "download_media",
     description: [
-      "Download media (image, video, audio, document, sticker) from a WhatsApp message via S3-compatible storage.",
+      "Download media (image, video, audio, document, sticker) from a WhatsApp message. Stored locally on the server by default (MEDIA_STORAGE=local); a repeat call for the same message reuses what's already there.",
       "",
       "For audio messages (audio/ptt), `transcribe` defaults to true: the bytes are preprocessed (16 kHz mono FLAC)",
       "and run through Whisper (`openai/whisper-large-v3` via OpenRouter). The response is an",
