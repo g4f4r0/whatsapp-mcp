@@ -1,0 +1,14 @@
+diff --git a/dist/index.js b/dist/index.js
+index 64cd75de1a686bd063b8f0deccb1b704e8ff398e..541c60c34594d22cb77bba3d64e2f7b1688aaff2 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -450,6 +450,9 @@ async function connectSocket(config, connectionState, socketState) {
+       keys: makeCacheableSignalKeyStore(state.keys, logger)
+     },
+     generateHighQualityLinkPreview: config.generateHighQualityLinkPreview ?? true,
++    // Local patch (pnpm patch, see patches/@amiticia__baileys-client.patch): stay
++    // offline so the phone keeps receiving push notifications.
++    markOnlineOnConnect: false,
+     // Baileys merges config over its defaults, so an explicitly-`undefined` key
+     // overrides the default with `undefined` — and `handleNotification` calls
+     // this without an existence guard, crashing the reconnect loop with

@@ -32,7 +32,7 @@
     "prepare": "husky || true"
   },
   "dependencies": {
-    "@amiticia/baileys-client": "link:../baileys-client",
+    "@amiticia/baileys-client": "github:eusoubrasileiro/baileys-client#875db8b",
     "@whiskeysockets/baileys": "^7.0.0-rc14",
     "better-sqlite3": "^12.9.0",
     "drizzle-orm": "^0.45.2",
@@ -67,9 +67,13 @@
   },
   "pnpm": {
     "onlyBuiltDependencies": [
+      "@amiticia/baileys-client",
       "better-sqlite3",
       "esbuild"
-    ]
+    ],
+    "patchedDependencies": {
+      "@amiticia/baileys-client@0.3.0": "patches/@amiticia__baileys-client@0.3.0.patch"
+    }
   },
   "packageManager": "pnpm@10.33.2"
 }
