@@ -9,7 +9,7 @@ All configuration is environment variables. The production values live in `deplo
 |----------|---------|-------------|
 | `WHATSAPP_MCP_DATA_DIR` | `.` | Base directory for `auth_info/`, `data/`, and pino log files |
 | `LOG_LEVEL` | `info` | Pino log level |
-| `MCP_TRANSPORT` | `stdio` | `stdio` or `httpstream` (the Docker image sets `httpstream`) |
+| `MCP_TRANSPORT` | `stdio` | `stdio`, `httpstream` (the Docker image sets `httpstream`), or `local-rpc` — a lightweight internal-only tool endpoint with no FastMCP/MCP-protocol overhead, used by the gateway for its own children (see [Multi-account gateway](#multi-account-gateway)). Never set this by hand for a standalone instance. |
 | `MCP_HOST` | `127.0.0.1` | Bind host when `MCP_TRANSPORT=httpstream` |
 | `MCP_PORT` | `3001` | Bind port when `MCP_TRANSPORT=httpstream` (the Docker image sets `39001`) |
 | `MCP_ENDPOINT` | `/mcp` | HTTP path for MCP when `MCP_TRANSPORT=httpstream` |
@@ -58,16 +58,30 @@ All configuration is environment variables. The production values live in `deplo
 one gateway process that fronts every account configured under
 `WHATSAPP_MCP_ACCOUNTS_DIR` (default `~/.config/whatsapp-mcp/accounts`, one `<account>.env`
 per account — same `EXPECTED_WA_NUMBER`/`MCP_PORT`/`QR_SERVER_PORT`/`STREAM_SERVER_PORT`
-format as before). Each account still runs as its own child process (this same `src/main.ts`,
-unchanged) on its already-assigned, loopback-only port block; the gateway is the only thing
-those ports are exposed to. Every tool gets a required `account` parameter, plus a
-gateway-native `list_accounts` tool. Pairing pages are served at `/qr/<account>` on one port.
-Additional gateway env vars: `WHATSAPP_MCP_DATA_ROOT` (default
+format as before). Each account still runs as its own child process (this same `src/main.ts`, unchanged, just
+started with `MCP_TRANSPORT=local-rpc` — see above) on its already-assigned, loopback-only port
+block; the gateway is the only thing those ports are exposed to. Every tool gets a required
+`account` parameter, plus a gateway-native `list_accounts` tool. Pairing pages are served at
+`/qr/<account>` on one port. Additional gateway env vars: `WHATSAPP_MCP_DATA_ROOT` (default
 `~/.local/share/whatsapp-mcp`, holding each account's existing `<name>/` subdir),
 `WHATSAPP_MCP_GATEWAY_LOG_DIR` (default: same as the data root). `MCP_PORT`/`MCP_HOST` and
 `QR_SERVER_PORT`/`QR_SERVER_HOST` on the gateway itself default to `39090`/`39091` rather than
 the single-account `39001`/`39002`, since those are now taken by the first account's internal
 child ports. See `src/gateway/server.ts`.
+
+### Memory footprint
+
+`pnpm start`/`pnpm start:gateway` (and the ops launcher) pass V8 heap flags
+(`--max-old-space-size`, `--max-semi-space-size`, `--optimize-for-size`) — on this dependency
+graph (drizzle-orm's import alone commits well over 100 MB of heap by default, regardless of
+how little of it is actually used) V8's default heap sizing is dramatically oversized for a
+single low-traffic WhatsApp account. Capping it, plus the gateway never importing the
+single-account stack it doesn't run (see `mcp/tools/contracts.ts`) and children talking to the
+gateway over `local-rpc` instead of a second real MCP server, brought one account's steady-state
+resident memory down from roughly 390 MB (gateway + one child) to roughly 130–140 MB each —
+about a 30% reduction, with an even larger cut to peak memory during connect/sync. Each
+additional account adds one more child process at roughly the same per-child cost; the gateway's
+own footprint is a fixed cost shared across every account.
 
 ## Data storage
 
