@@ -241,6 +241,23 @@ describe("database", () => {
       storeContact({ jid: "123@s.whatsapp.net", notify: "Ali2" });
       expect(getContactName("123@s.whatsapp.net")).toBe("Alice");
     });
+
+    it("a masked placeholder name never overwrites an existing real name", () => {
+      storeContact({ jid: "123@s.whatsapp.net", name: "Andrea Chavez" });
+      storeContact({ jid: "123@s.whatsapp.net", name: "+1∙∙∙∙∙∙∙∙73" });
+      expect(getContactName("123@s.whatsapp.net")).toBe("Andrea Chavez");
+    });
+
+    it("a masked placeholder name is still stored when there's no real name yet", () => {
+      storeContact({ jid: "456@s.whatsapp.net", name: "+1∙∙∙∙∙∙∙∙73" });
+      expect(getContactName("456@s.whatsapp.net")).toBe("+1∙∙∙∙∙∙∙∙73");
+    });
+
+    it("a real name still overwrites a previously-stored masked placeholder", () => {
+      storeContact({ jid: "789@s.whatsapp.net", name: "+1∙∙∙∙∙∙∙∙73" });
+      storeContact({ jid: "789@s.whatsapp.net", name: "Andrea Chavez" });
+      expect(getContactName("789@s.whatsapp.net")).toBe("Andrea Chavez");
+    });
   });
 
   // ── Date Filtering ───────────────────────────────────────────────

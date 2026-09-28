@@ -35,11 +35,25 @@ describe("gateway/qr-proxy", () => {
     await new Promise<void>((resolve) => upstream.close(() => resolve()));
   });
 
-  it("proxies /qr/<account> to that account's root", async () => {
+  it("proxies /qr/<account> to that account's root (following the redirect below)", async () => {
     const res = await fetch(`http://127.0.0.1:${proxyPort}/qr/business`);
     expect(res.status).toBe(200);
     expect(res.headers.get("x-upstream-path")).toBe("/");
     expect(await res.text()).toContain("upstream body");
+  });
+
+  it("redirects the bare /qr/<account> (no trailing slash) to /qr/<account>/", async () => {
+    // So the page's relative "qr.png" image src resolves under the account
+    // prefix instead of the gateway's own root — see qr-server.ts.
+    const res = await fetch(`http://127.0.0.1:${proxyPort}/qr/business`, { redirect: "manual" });
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("/qr/business/");
+  });
+
+  it("does not redirect /qr/<account>/ — it's already proxied straight through", async () => {
+    const res = await fetch(`http://127.0.0.1:${proxyPort}/qr/business/`, { redirect: "manual" });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-upstream-path")).toBe("/");
   });
 
   it("proxies /qr/<account>/qr.png to the account's /qr.png", async () => {

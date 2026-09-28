@@ -897,7 +897,16 @@ export function storeContact(contact: {
       .onConflictDoUpdate({
         target: schema.contacts.jid,
         set: {
-          name: sql`COALESCE(excluded.name, contacts.name)`,
+          // WhatsApp sends masked placeholder names during a history sync
+          // (e.g. "+1∙∙∙∙∙∙∙∙73", using U+2219 BULLET OPERATOR) before the
+          // real saved name arrives. Never let one of those overwrite an
+          // existing real name — but still accept it when there's nothing
+          // real on file yet (same fallback as before).
+          name: sql`CASE
+            WHEN excluded.name LIKE '%∙%' AND contacts.name IS NOT NULL AND contacts.name NOT LIKE '%∙%'
+              THEN contacts.name
+            ELSE COALESCE(excluded.name, contacts.name)
+          END`,
           notify: sql`COALESCE(excluded.notify, contacts.notify)`,
           phoneNumber: sql`COALESCE(excluded.phone_number, contacts.phone_number)`,
         },

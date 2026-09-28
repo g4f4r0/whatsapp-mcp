@@ -42,53 +42,69 @@ export type QrServerOptions = {
   disconnectedGraceS?: number;
 };
 
+/** Exact text every other BB MCP shows on OAuth success — plain, no styling. */
+const SUCCESS_TEXT = "Authentication completed. You can close this window.";
+
+function contentFor(status: string): string {
+  if (status === "connected") return `<p>${SUCCESS_TEXT}</p>`;
+  if (status === "qr_pending") {
+    // Relative, not "/qr.png": this same markup is served standalone (where
+    // the page lives at "/") and behind the gateway's proxy (where it lives
+    // at "/qr/<account>/") — a root-relative src would 404 behind the proxy.
+    return `<img id="qr" src="qr.png" width="320" height="320" alt="WhatsApp QR" />`;
+  }
+  return `<p>${escapeHtml(status)}&hellip;</p>`;
+}
+
 /**
  * Less is more: the pairing page shows only the QR code while waiting, and
- * only a plain success card once paired — nothing else (no status text, no
- * re-pair button). The success card matches how BB itself renders an MCP
- * OAuth success (apps/app/src/views/AuthCallbackView.tsx): a small bordered
- * card, a checkmark, a title, one line of muted subtext.
+ * only the plain success line once paired — no card, icon, styling or
+ * status text. No full-page reloads: a few lines of inline JS poll `health`
+ * (relative, same reasoning as the image src above) every 3s and swap the
+ * QR image or the success text in place — the QR itself only changes server
+ * side every ~20s, but re-pointing the `<img>` at a fresh URL is cheap and
+ * doesn't flash the way a full page reload does.
  */
 function renderHtml(state: ConnectionState): string {
-  const { status, qrCode } = state;
-
-  const refreshing = status !== "connected";
-  let body: string;
-  if (status === "connected") {
-    body = `
-      <div class="card">
-        <div class="row">
-          <svg class="check" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm-1.2 14.6-4.2-4.2 1.4-1.4 2.8 2.8 5.8-5.8 1.4 1.4-7.2 7.2Z" fill="currentColor"/></svg>
-          <h1>WhatsApp connected</h1>
-        </div>
-        <p>You can close this window.</p>
-      </div>`;
-  } else if (status === "qr_pending" && qrCode) {
-    body = `<img src="/qr.png" width="320" height="320" alt="WhatsApp QR" />`;
-  } else {
-    body = `<p class="muted">${escapeHtml(status)}&hellip;</p>`;
-  }
-
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-${refreshing ? '<meta http-equiv="refresh" content="3" />' : ""}
 <title>WhatsApp</title>
 <style>
 body { font-family: system-ui, sans-serif; display: flex; justify-content: center; padding: 3rem 1rem 0; background: #fff; color: #0a0a0a; }
 img { display: block; border: 1px solid #eee; padding: 0.5rem; background: #fff; }
-.muted { color: #71717a; font-size: 0.875rem; }
-.card { width: 100%; max-width: 24rem; border: 1px solid #e4e4e7; border-radius: 0.5rem; padding: 0.75rem 1rem; }
-.row { display: flex; align-items: center; gap: 0.5rem; }
-.check { flex-shrink: 0; }
-h1 { font-size: 0.875rem; font-weight: 600; margin: 0; }
-.card p { margin: 0.25rem 0 0; font-size: 0.75rem; color: #71717a; }
 </style>
 </head>
 <body>
-${body}
+<div id="content">${contentFor(state.status)}</div>
+<script>
+(function () {
+  var content = document.getElementById("content");
+  var timer = setInterval(poll, 3000);
+  function poll() {
+    fetch("health", { cache: "no-store" })
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        if (data.status === "qr_pending") {
+          var img = document.getElementById("qr");
+          if (!img) {
+            content.innerHTML = '<img id="qr" width="320" height="320" alt="WhatsApp QR">';
+            img = document.getElementById("qr");
+          }
+          img.src = "qr.png?t=" + Date.now();
+        } else if (data.status === "connected") {
+          content.innerHTML = "<p>${SUCCESS_TEXT}</p>";
+          clearInterval(timer);
+        } else {
+          content.textContent = data.status + "\\u2026";
+        }
+      })
+      .catch(function () { /* transient poll failure — try again next tick */ });
+  }
+})();
+</script>
 </body>
 </html>`;
 }
@@ -157,6 +173,7 @@ export function createQrServer(
         // finally restarted instead of sitting "healthy" with a dead socket.
         res.writeHead(wedged ? 503 : 200, {
           "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store",
         });
         res.end(body);
       },
@@ -187,7 +204,10 @@ export function createQrServer(
       method: "GET",
       path: "/",
       handler: async (_req, res) => {
-        res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        res.writeHead(200, {
+          "content-type": "text/html; charset=utf-8",
+          "cache-control": "no-store",
+        });
         res.end(renderHtml(getState()));
       },
     },
@@ -195,7 +215,10 @@ export function createQrServer(
       method: "GET",
       path: "/index.html",
       handler: async (_req, res) => {
-        res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        res.writeHead(200, {
+          "content-type": "text/html; charset=utf-8",
+          "cache-control": "no-store",
+        });
         res.end(renderHtml(getState()));
       },
     },

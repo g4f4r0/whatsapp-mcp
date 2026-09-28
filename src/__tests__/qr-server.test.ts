@@ -218,25 +218,35 @@ describe("createQrServer", () => {
     });
   });
 
-  it("GET / returns HTML with auto-refresh meta", async () => {
+  it("GET / never uses a full-page meta refresh — updates happen via the inline poll script", async () => {
     const res = await fetch(`${baseUrl}/`);
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/html");
     const body = await res.text();
-    expect(body).toContain('<meta http-equiv="refresh"');
+    expect(body).not.toContain('<meta http-equiv="refresh"');
     expect(body).toContain("disconnected");
+    // The polling script itself is present, fetching a relative "health" URL
+    // (so it resolves correctly standalone and behind the gateway's proxy).
+    expect(body).toContain('fetch("health"');
   });
 
-  it("GET / shows a plain success message when connected — no phone number, no status", async () => {
+  it("GET / while qr_pending also has no meta refresh (the script polls instead)", async () => {
+    state.status = "qr_pending";
+    state.qrCode = "2@abc123,def456,ghi789==,hex";
+    const res = await fetch(`${baseUrl}/`);
+    const body = await res.text();
+    expect(body).not.toContain('<meta http-equiv="refresh"');
+  });
+
+  it("GET / shows the exact plain success text when connected — no card, icon or status", async () => {
     state.status = "connected";
     state.user = "5531999999999@s.whatsapp.net";
     const res = await fetch(`${baseUrl}/`);
     const body = await res.text();
-    expect(body).toContain("WhatsApp connected");
-    expect(body).toContain("You can close this window.");
+    expect(body).toContain("Authentication completed. You can close this window.");
     expect(body).not.toContain("5531999999999");
-    // No auto-refresh once paired — there's nothing left to wait for.
-    expect(body).not.toContain('<meta http-equiv="refresh"');
+    expect(body).not.toContain("<svg");
+    expect(body).not.toContain('class="card"');
   });
 
   it("GET /qr.png returns 404 when no QR is pending", async () => {
@@ -300,8 +310,20 @@ describe("createQrServer", () => {
     state.qrCode = "2@abc123,def456,ghi789==,hex";
     const res = await fetch(`${baseUrl}/`);
     const body = await res.text();
-    expect(body).toContain('<img src="/qr.png"');
+    expect(body).toContain('id="qr" src="qr.png"');
     expect(body).not.toContain("Scan");
     expect(body).not.toContain("Linked Devices");
+  });
+
+  it("the poll script swaps in the QR image, cache-busted, without a full reload", async () => {
+    const res = await fetch(`${baseUrl}/`);
+    const body = await res.text();
+    expect(body).toContain('img.src = "qr.png?t="');
+  });
+
+  it("the poll script swaps in the exact success text once connected, without a full reload", async () => {
+    const res = await fetch(`${baseUrl}/`);
+    const body = await res.text();
+    expect(body).toContain("Authentication completed. You can close this window.");
   });
 });

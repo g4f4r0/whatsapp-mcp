@@ -34,6 +34,17 @@ export function createQrProxy(opts: QrProxyOptions): Server {
       return;
     }
 
+    // The page's own HTML uses a relative image src ("qr.png") so the same
+    // markup works standalone and behind this proxy — but that only resolves
+    // to /qr/<account>/qr.png if the browser's address bar has the trailing
+    // slash. Without this redirect, a bare "/qr/<account>" resolves "qr.png"
+    // against "/", i.e. the gateway's own root, which 404s.
+    if (!rest && req.method === "GET") {
+      res.writeHead(302, { location: `/qr/${account}/` });
+      res.end();
+      return;
+    }
+
     const upstreamPath = rest && rest !== "/" ? rest : "/";
     const upstream = http.request(
       { host: "127.0.0.1", port, method: req.method, path: upstreamPath, headers: req.headers },
