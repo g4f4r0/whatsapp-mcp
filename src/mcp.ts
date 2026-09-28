@@ -1,17 +1,20 @@
 import { FastMCP } from "fastmcp";
 import type { Logger } from "pino";
 
-import { registerActionsTools } from "./mcp/tools/actions.ts";
-import { registerChatsTools } from "./mcp/tools/chats.ts";
-import { registerConnectionTools } from "./mcp/tools/connection.ts";
-import { registerContactsTools } from "./mcp/tools/contacts.ts";
-import { registerGroupsTools } from "./mcp/tools/groups.ts";
-import { registerMediaTools } from "./mcp/tools/media.ts";
-import { registerMessagesTools } from "./mcp/tools/messages.ts";
-import { registerMonitoringTools } from "./mcp/tools/monitoring.ts";
-import { registerSendingTools } from "./mcp/tools/sending.ts";
-import type { ToolDeps } from "./mcp/tools/types.ts";
-import { registerWebhooksTools } from "./mcp/tools/webhooks.ts";
+import { createBearerAuthenticate } from "./mcp/bearer-auth.ts";
+import {
+  registerActionsTools,
+  registerChatsTools,
+  registerConnectionTools,
+  registerContactsTools,
+  registerGroupsTools,
+  registerMediaTools,
+  registerMessagesTools,
+  registerMonitoringTools,
+  registerSendingTools,
+  registerWebhooksTools,
+  type ToolDeps,
+} from "./mcp/tools/index.ts";
 
 /**
  * Server-level routing hint surfaced to clients under "MCP Server Instructions".
@@ -38,36 +41,15 @@ blocks all other work. For standing presence use follow_chat.
 export async function startMcpServer(mcpLogger: Logger, waLogger: Logger): Promise<void> {
   mcpLogger.info("Initializing FastMCP server...");
 
-  const authToken = process.env.MCP_AUTH_TOKEN;
-  if (!authToken) {
-    mcpLogger.warn(
-      "MCP_AUTH_TOKEN not set — HTTP MCP endpoint will accept unauthenticated requests. OK for stdio/local, DO NOT run like this in production.",
-    );
-  }
-
   const server = new FastMCP({
     name: "whatsapp-baileys-ts",
     version: "0.3.0",
     instructions: SERVER_INSTRUCTIONS,
-    authenticate: async (request) => {
-      // stdio transport passes undefined — trust local invocation.
-      if (!request) return {};
-
-      if (!authToken) return {};
-
-      const header = request.headers.authorization;
-      const raw = Array.isArray(header) ? header[0] : header;
-      if (!raw?.startsWith("Bearer ")) {
-        throw new Response(null, {
-          status: 401,
-          statusText: "Missing or invalid Authorization header",
-        });
-      }
-      if (raw.slice(7) !== authToken) {
-        throw new Response(null, { status: 401, statusText: "Invalid token" });
-      }
-      return {};
-    },
+    authenticate: createBearerAuthenticate(
+      process.env.MCP_AUTH_TOKEN,
+      mcpLogger,
+      "MCP_AUTH_TOKEN not set — HTTP MCP endpoint will accept unauthenticated requests. OK for stdio/local, DO NOT run like this in production.",
+    ),
   });
 
   const deps: ToolDeps = { mcpLogger, waLogger };

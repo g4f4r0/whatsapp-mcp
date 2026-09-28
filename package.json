@@ -33,6 +33,7 @@
   },
   "dependencies": {
     "@amiticia/baileys-client": "github:eusoubrasileiro/baileys-client#875db8b",
+    "@modelcontextprotocol/sdk": "^1.27.0",
     "@whiskeysockets/baileys": "^7.0.0-rc14",
     "better-sqlite3": "^12.9.0",
     "drizzle-orm": "^0.45.2",

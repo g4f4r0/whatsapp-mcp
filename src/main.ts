@@ -2,6 +2,7 @@ import fs from "node:fs";
 import pino from "pino";
 import { closeDatabase, initializeDatabase, setDatabaseLogger } from "./database.ts";
 import { startMcpServer } from "./mcp.ts";
+import { installLifecycle } from "./process-lifecycle.ts";
 import { createQrServer } from "./qr-server.ts";
 import { ensureBucketReady, putUpload } from "./storage.ts";
 import { createStreamServer } from "./stream/server.ts";
@@ -119,23 +120,10 @@ async function main() {
   mcpLogger.info("Application setup complete. Running...");
 }
 
-async function shutdown(signal: string) {
-  mcpLogger.info(`Received ${signal}. Shutting down gracefully...`);
-
-  closeDatabase();
-
-  waLogger.flush();
-  mcpLogger.flush();
-
-  process.exit(0);
-}
-
-process.on("SIGINT", () => shutdown("SIGINT"));
-process.on("SIGTERM", () => shutdown("SIGTERM"));
-
-main().catch((error) => {
-  mcpLogger.fatal({ err: error }, "Unhandled error during application startup");
-  waLogger.flush();
-  mcpLogger.flush();
-  process.exit(1);
+installLifecycle({
+  waLogger,
+  mcpLogger,
+  onShutdown: () => closeDatabase(),
+  main: main(),
+  label: "application",
 });

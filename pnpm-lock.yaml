@@ -16,6 +16,9 @@ importers:
       '@amiticia/baileys-client':
         specifier: github:eusoubrasileiro/baileys-client#875db8b
         version: https://codeload.github.com/eusoubrasileiro/baileys-client/tar.gz/875db8b34eb337b1df1065c21b7b80d83d5c42ee(patch_hash=6fea7a41038eb90e8aae4ca713f7b275354e21af1d4fbabb92ad1669b489a4c9)(sharp@0.34.5)
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.27.0
+        version: 1.27.0(zod@4.3.6)
       '@whiskeysockets/baileys':
         specifier: ^7.0.0-rc14
         version: 7.0.0-rc14(sharp@0.34.5)
