@@ -1,19 +1,11 @@
 import { normalizeJid } from "@amiticia/baileys-client";
-import { z } from "zod";
-
 import { assertSocketActive } from "../../actions.ts";
 import { resolveRecipient } from "../../recipient.ts";
 import { assertSendAccepted, getSendAckWaitMs, isPresendCheckEnabled } from "../../send-guard.ts";
 import { applySendPolicy } from "../../send-policy.ts";
 import { sendWhatsAppMedia, sendWhatsAppMessage } from "../../whatsapp.ts";
+import { sendFileContract, sendMessageContract } from "./contracts.ts";
 import type { ToolDeps, ToolRegistrar } from "./types.ts";
-
-const ALLOW_COLD_DESCRIPTION =
-  "Send even though this contact has never messaged this account (a cold first contact). " +
-  "Cold reach-outs are what get a WhatsApp account restricted, so use this ONLY when the " +
-  "person explicitly asked to be contacted — never to work around the refusal in bulk. " +
-  "On an instance configured with SEND_COLD_OVERRIDE=deny this parameter is IGNORED and " +
-  "the send is still refused; the refusal says so. Default false.";
 
 /**
  * The account's own JIDs — phone-number (`user.id`) and LID (`user.lid`).
@@ -42,21 +34,7 @@ export function registerSendingTools(server: ToolRegistrar, deps: ToolDeps): voi
   }
 
   server.addTool({
-    name: "send_message",
-    description:
-      "Send a text message to a contact or group. The recipient is verified before sending: " +
-      "a number that is not on WhatsApp is rejected outright, and a phone JID is upgraded to " +
-      "its canonical @lid. If the server refuses the message, this tool THROWS rather than " +
-      "reporting success — do not build phone JIDs by hand, resolve them with search_contacts. " +
-      "Sends are also paced and a contact who has never messaged this account is refused, " +
-      "because cold reach-outs get the number restricted.",
-    parameters: z.object({
-      recipient: z
-        .string()
-        .describe("Recipient JID (e.g., 'number@s.whatsapp.net' or 'group@g.us')"),
-      message: z.string().min(1).describe("The text message to send"),
-      allow_cold_contact: z.boolean().optional().default(false).describe(ALLOW_COLD_DESCRIPTION),
-    }),
+    ...sendMessageContract,
     execute: async ({ recipient, message, allow_cold_contact }) => {
       mcpLogger.info(`[MCP Tool] Executing send_message to ${recipient}`);
       const socket = assertSocketActive();
@@ -91,26 +69,7 @@ export function registerSendingTools(server: ToolRegistrar, deps: ToolDeps): voi
   });
 
   server.addTool({
-    name: "send_file",
-    description:
-      "Send a file (image, video, document, audio) to a contact or group. file_path accepts: (a) http(s) URL, (b) base64 data: URL — context-heavy, only viable for tiny payloads, (c) absolute path that exists ON THE MCP SERVER (NOT your local disk — the server runs in a remote Docker container and cannot read host files). To send a host-disk file: POST raw bytes to `<MCP host>/upload` (Bearer auth = MCP_AUTH_TOKEN), receive `{url}`, then pass that URL here. Max 16 MB. For type=image the bytes must be JPEG or PNG (WebP screenshots are rejected — convert to PNG first).",
-    parameters: z.object({
-      recipient: z.string().describe("Recipient JID"),
-      file_path: z
-        .string()
-        .describe(
-          "http(s) URL, base64 data: URL, or server-side absolute path. To send a local host file with a remote MCP, upload it to <MCP host>/upload first and pass the returned URL. Max 16 MB.",
-        ),
-      caption: z.string().optional().describe("Optional caption for images/videos/documents"),
-      type: z
-        .enum(["image", "video", "document", "audio"])
-        .optional()
-        .default("image")
-        .describe(
-          "Type of the media. For 'image': only JPEG/PNG bytes are accepted (WebP rejected — convert to PNG first). For 'video': MP4/3GPP only. For 'audio': AAC/AMR/MP3/M4A/OGG. (default: image)",
-        ),
-      allow_cold_contact: z.boolean().optional().default(false).describe(ALLOW_COLD_DESCRIPTION),
-    }),
+    ...sendFileContract,
     execute: async ({ recipient, file_path, caption, type, allow_cold_contact }) => {
       mcpLogger.info(`[MCP Tool] Executing send_file to ${recipient}: ${file_path}`);
       const socket = assertSocketActive();

@@ -64,19 +64,6 @@ vi.mock("../describe/vision.ts", () => ({
   describeImage: vi.fn(),
 }));
 
-vi.mock("fastmcp", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("fastmcp")>();
-  return {
-    ...actual,
-    imageContent: vi
-      .fn()
-      .mockResolvedValue({ type: "image", data: "base64img", mimeType: "image/jpeg" }),
-    audioContent: vi
-      .fn()
-      .mockResolvedValue({ type: "audio", data: "base64aud", mimeType: "audio/ogg" }),
-  };
-});
-
 import pino from "pino";
 import { executeDownloadMedia } from "../actions.ts";
 import { getMessageById, updateMessageMediaObjectKey } from "../database.ts";

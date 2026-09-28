@@ -1,7 +1,7 @@
-import { FastMCP } from "fastmcp";
 import type { Logger } from "pino";
 
-import { createBearerAuthenticate } from "./mcp/bearer-auth.ts";
+import { CollectingRegistrar } from "./mcp/collecting-registrar.ts";
+import { startLocalRpcServer } from "./mcp/local-rpc.ts";
 import {
   registerActionsTools,
   registerChatsTools,
@@ -15,6 +15,7 @@ import {
   registerWebhooksTools,
   type ToolDeps,
 } from "./mcp/tools/index.ts";
+import type { ToolRegistrar } from "./mcp/tools/types.ts";
 
 /**
  * Server-level routing hint surfaced to clients under "MCP Server Instructions".
@@ -38,8 +39,42 @@ Do NOT loop wait_for_messages to "stay present" — each empty return wastes a t
 blocks all other work. For standing presence use follow_chat.
 `.trim();
 
+/** Per-domain tool registries. Each registry owns the tools listed in its CLAUDE.md section. */
+function registerAllTools(registrar: ToolRegistrar, deps: ToolDeps): void {
+  registerConnectionTools(registrar, deps);
+  registerContactsTools(registrar, deps);
+  registerMessagesTools(registrar, deps);
+  registerMonitoringTools(registrar, deps);
+  registerChatsTools(registrar, deps);
+  registerGroupsTools(registrar, deps);
+  registerSendingTools(registrar, deps);
+  registerActionsTools(registrar, deps);
+  registerMediaTools(registrar, deps);
+  registerWebhooksTools(registrar, deps);
+}
+
 export async function startMcpServer(mcpLogger: Logger, waLogger: Logger): Promise<void> {
+  const transport = (process.env.MCP_TRANSPORT ?? "stdio").toLowerCase();
+  const deps: ToolDeps = { mcpLogger, waLogger };
+
+  if (transport === "local-rpc") {
+    // Gateway-spawned child: only the gateway ever calls this process, over
+    // its own lightweight internal wire format — never real MCP protocol, so
+    // no FastMCP (and everything it pulls in) needs to load here at all. See
+    // mcp/local-rpc.ts's docblock.
+    const registrar = new CollectingRegistrar();
+    registerAllTools(registrar, deps);
+    await startLocalRpcServer(registrar, mcpLogger, {
+      port: Number(process.env.MCP_PORT ?? 3001),
+      host: process.env.MCP_HOST ?? "127.0.0.1",
+      authToken: process.env.MCP_AUTH_TOKEN,
+    });
+    return;
+  }
+
   mcpLogger.info("Initializing FastMCP server...");
+  const { FastMCP } = await import("fastmcp");
+  const { createBearerAuthenticate } = await import("./mcp/bearer-auth.ts");
 
   const server = new FastMCP({
     name: "whatsapp-baileys-ts",
@@ -52,20 +87,7 @@ export async function startMcpServer(mcpLogger: Logger, waLogger: Logger): Promi
     ),
   });
 
-  const deps: ToolDeps = { mcpLogger, waLogger };
-
-  // Per-domain tool registries. Each registry owns the tools listed in its
-  // CLAUDE.md section: name, schema, execute body — nothing more.
-  registerConnectionTools(server, deps);
-  registerContactsTools(server, deps);
-  registerMessagesTools(server, deps);
-  registerMonitoringTools(server, deps);
-  registerChatsTools(server, deps);
-  registerGroupsTools(server, deps);
-  registerSendingTools(server, deps);
-  registerActionsTools(server, deps);
-  registerMediaTools(server, deps);
-  registerWebhooksTools(server, deps);
+  registerAllTools(server, deps);
 
   // ── Resource ──────────────────────────────────────────────────────
 
@@ -94,7 +116,6 @@ TABLE webhook_subscriptions (
     },
   });
 
-  const transport = (process.env.MCP_TRANSPORT ?? "stdio").toLowerCase();
   if (transport === "stdio") {
     mcpLogger.info("FastMCP server configured. Starting (stdio)...");
     await server.start();
@@ -111,5 +132,7 @@ TABLE webhook_subscriptions (
     });
     return;
   }
-  throw new Error(`Invalid MCP_TRANSPORT: "${transport}". Expected "stdio" or "httpStream".`);
+  throw new Error(
+    `Invalid MCP_TRANSPORT: "${transport}". Expected "stdio", "httpStream", or "local-rpc".`,
+  );
 }

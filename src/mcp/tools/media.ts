@@ -1,42 +1,12 @@
-import { z } from "zod";
-
 import { executeDownloadMedia } from "../../actions.ts";
+import { downloadMediaContract } from "./contracts.ts";
 import type { ToolDeps, ToolRegistrar } from "./types.ts";
 
 export function registerMediaTools(server: ToolRegistrar, deps: ToolDeps): void {
   const { waLogger } = deps;
 
   server.addTool({
-    name: "download_media",
-    description: [
-      "Download media (image, video, audio, document, sticker) from a WhatsApp message. Stored locally on the server by default (MEDIA_STORAGE=local); a repeat call for the same message reuses what's already there.",
-      "",
-      "For audio messages (audio/ptt), `transcribe` defaults to true: the bytes are preprocessed (16 kHz mono FLAC)",
-      "and run through Whisper (`openai/whisper-large-v3` via OpenRouter). The response is an",
-      "XML-wrapped <transcription> text block instead of the raw audio. Pass `transcribe: false` to get audio bytes.",
-      "",
-      "For image messages, `describe` is opt-in (default false). When true, the bytes are sent to a vision model via OpenRouter (default `openai/gpt-6-luna`, override with VISION_MODEL)",
-      "and the response is an XML-wrapped <image_description> text block instead of the inline image.",
-      "",
-      "For non-audio/non-image media (documents, video, stickers), both flags are no-ops and the tool returns the",
-      "standard resource_link.",
-    ].join("\n"),
-    parameters: z.object({
-      message_id: z.string().describe("The ID of the message containing media"),
-      chat_jid: z.string().describe("The JID of the chat where the message is"),
-      transcribe: z
-        .boolean()
-        .optional()
-        .describe(
-          "Audio only: transcribe to text (default true for audio/ptt). Set false to receive raw audio bytes.",
-        ),
-      describe: z
-        .boolean()
-        .optional()
-        .describe(
-          "Image only: caption via an OpenRouter vision model (default false). Set true to receive an <image_description> text block instead of the inline image.",
-        ),
-    }),
+    ...downloadMediaContract,
     execute: executeDownloadMedia.bind(null, waLogger),
   });
 }

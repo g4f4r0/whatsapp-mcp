@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import * as Minio from "minio";
 import { resolveDataDir } from "./env-config.ts";
 
 export interface MediaStorageClient {
@@ -74,8 +73,16 @@ async function putMediaLocal(params: {
   return { key: filePath, url: `file://${filePath}` };
 }
 
-function getClient(): MediaStorageClient {
+/**
+ * `minio` (~40 MB resident once loaded) is dynamic-imported here instead of at
+ * module scope, so an instance running the default `MEDIA_STORAGE=local` never
+ * pays for it — this module loads at startup regardless of mode (storage.ts is
+ * a static import of actions.ts), but the S3 client library only loads if an
+ * S3 call actually happens.
+ */
+async function getClient(): Promise<MediaStorageClient> {
   if (_client) return _client;
+  const Minio = await import("minio");
   _client = new Minio.Client({
     endPoint: process.env.S3_ENDPOINT ?? "localhost",
     port: Number(process.env.S3_PORT ?? 9000),
@@ -117,12 +124,19 @@ export async function putMedia(params: {
   }
 
   const tenantId = params.tenantId ?? process.env.TENANT_ID ?? "default";
-  const bucket = getBucket();
   const sanitizedJid = sanitizeJidSegment(chatJid);
   const key = `t/${tenantId}/${sanitizedJid}/${messageId}.${ext}`;
 
-  await getClient().putObject(bucket, key, buffer, buffer.length, { "Content-Type": mimetype });
+  return putS3Object(key, buffer, mimetype);
+}
 
+async function putS3Object(
+  key: string,
+  buffer: Buffer,
+  mimetype: string,
+): Promise<{ key: string; url: string }> {
+  const client = await getClient();
+  await client.putObject(getBucket(), key, buffer, buffer.length, { "Content-Type": mimetype });
   return { key, url: publicUrlFor(key) };
 }
 
@@ -141,12 +155,9 @@ export async function putUpload(params: {
 }): Promise<{ key: string; url: string }> {
   const { buffer, mimetype, ext } = params;
   const tenantId = params.tenantId ?? process.env.TENANT_ID ?? "default";
-  const bucket = getBucket();
   const key = `t/${tenantId}/uploads/${randomUUID()}.${ext}`;
 
-  await getClient().putObject(bucket, key, buffer, buffer.length, { "Content-Type": mimetype });
-
-  return { key, url: publicUrlFor(key) };
+  return putS3Object(key, buffer, mimetype);
 }
 
 /**
@@ -159,7 +170,8 @@ export async function getMediaBytes(key: string): Promise<Buffer> {
     return fs.promises.readFile(key);
   }
   const bucket = getBucket();
-  const stream = await getClient().getObject(bucket, key);
+  const client = await getClient();
+  const stream = await client.getObject(bucket, key);
   const chunks: Buffer[] = [];
   for await (const chunk of stream) {
     chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
@@ -168,7 +180,7 @@ export async function getMediaBytes(key: string): Promise<Buffer> {
 }
 
 export async function ensureBucketReady(): Promise<void> {
-  const client = getClient();
+  const client = await getClient();
   const bucket = getBucket();
   const region = process.env.S3_REGION ?? "us-east-1";
   const skipPolicy = parseBoolEnv(process.env.S3_SKIP_POLICY, false);

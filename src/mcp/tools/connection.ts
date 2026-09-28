@@ -1,9 +1,9 @@
 import { spawn } from "node:child_process";
 import type { Logger } from "pino";
 import QRCode from "qrcode";
-import { z } from "zod";
 import { executeLogout } from "../../actions.ts";
 import { connectionState, startWhatsAppConnection } from "../../whatsapp.ts";
+import { getConnectionStatusContract, logoutContract } from "./contracts.ts";
 import type { ToolDeps, ToolRegistrar } from "./types.ts";
 
 /**
@@ -42,9 +42,7 @@ export function registerConnectionTools(server: ToolRegistrar, deps: ToolDeps): 
   const { mcpLogger, waLogger } = deps;
 
   server.addTool({
-    name: "get_connection_status",
-    description: "Get current WhatsApp connection status and QR code if pending",
-    parameters: z.object({}),
+    ...getConnectionStatusContract,
     execute: async () => {
       mcpLogger.info("[MCP Tool] Executing get_connection_status");
 
@@ -102,9 +100,7 @@ export function registerConnectionTools(server: ToolRegistrar, deps: ToolDeps): 
   });
 
   server.addTool({
-    name: "logout",
-    description: "Log out from WhatsApp and clear session data",
-    parameters: z.object({}),
+    ...logoutContract,
     execute: async () => {
       mcpLogger.info("[MCP Tool] Executing logout");
       return executeLogout();

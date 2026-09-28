@@ -9,7 +9,6 @@
  */
 
 import type { MediaType, WhatsAppSocket } from "@amiticia/baileys-client";
-import { audioContent, imageContent } from "fastmcp";
 import type { Logger } from "pino";
 
 import {
@@ -27,6 +26,18 @@ import { downloadMedia, socketState } from "./whatsapp.ts";
 import { renderImageDescription, renderTranscription } from "./xml.ts";
 
 export const MEDIA_INLINE_MAX_BYTES = Number(process.env.MEDIA_INLINE_MAX_BYTES ?? 5_242_880);
+
+/**
+ * Same shape as fastmcp's `imageContent`/`audioContent` helpers, without the
+ * import: those helpers exist to *detect* a MIME type via `file-type` (and
+ * fetch url/path inputs we never pass), but the mimetype is already known
+ * here from the WhatsApp message metadata — sniffing it again is redundant.
+ * Avoiding the "fastmcp" import keeps it out of every account's child
+ * process, which never runs a FastMCP server of its own (see mcp/local-rpc.ts).
+ */
+function inlineContent(buffer: Buffer, mimeType: string, type: "image" | "audio") {
+  return { type, data: buffer.toString("base64"), mimeType };
+}
 
 /** True when the message's media is audio (regular audio or push-to-talk). */
 function isAudioMessage(message: {
@@ -225,13 +236,11 @@ export async function executeDownloadMedia(waLogger: Logger, params: DownloadMed
   }
 
   if (mimetype.startsWith("image/") && fileLength < MEDIA_INLINE_MAX_BYTES) {
-    const img = await imageContent({ buffer });
-    return { content: [img, resLink, textBlock] };
+    return { content: [inlineContent(buffer, mimetype, "image"), resLink, textBlock] };
   }
 
   if (mimetype.startsWith("audio/") && fileLength < MEDIA_INLINE_MAX_BYTES) {
-    const aud = await audioContent({ buffer });
-    return { content: [aud, resLink, textBlock] };
+    return { content: [inlineContent(buffer, mimetype, "audio"), resLink, textBlock] };
   }
 
   return { content: [resLink, textBlock] };

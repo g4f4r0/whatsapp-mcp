@@ -17,8 +17,8 @@
     "url": "git+https://github.com/eusoubrasileiro/whatsapp-mcp.git"
   },
   "scripts": {
-    "start": "node --experimental-strip-types src/main.ts",
-    "start:gateway": "node --experimental-strip-types src/gateway-main.ts",
+    "start": "node --max-old-space-size=96 --max-semi-space-size=4 --optimize-for-size --experimental-strip-types src/main.ts",
+    "start:gateway": "node --max-old-space-size=64 --max-semi-space-size=2 --optimize-for-size --experimental-strip-types src/gateway-main.ts",
     "typecheck": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -34,7 +34,6 @@
   },
   "dependencies": {
     "@amiticia/baileys-client": "github:eusoubrasileiro/baileys-client#875db8b",
-    "@modelcontextprotocol/sdk": "^1.27.0",
     "@whiskeysockets/baileys": "^7.0.0-rc14",
     "better-sqlite3": "^12.9.0",
     "drizzle-orm": "^0.45.2",
@@ -50,6 +49,7 @@
     "@biomejs/biome": "^2.5.5",
     "@commitlint/cli": "^21.2.1",
     "@commitlint/config-conventional": "^21.2.0",
+    "@modelcontextprotocol/sdk": "^1.27.0",
     "@testcontainers/minio": "^10.0.0",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^25.6.0",

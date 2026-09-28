@@ -35,6 +35,22 @@ const SEND_GUARDRAILS = {
   SEND_RATE_LIMIT_PER_HOUR: "20",
 };
 
+/**
+ * V8's default heap sizing is tuned for throughput, not footprint — on this
+ * app's dependency graph (drizzle-orm alone) that means committing 100+ MB of
+ * young/old-gen space the process never comes close to using. Capping it costs
+ * nothing here: a personal WhatsApp account's working set (one socket, one
+ * SQLite connection, a bounded set of in-flight sends) fits comfortably inside
+ * these limits, and --optimize-for-size trades a little throughput for a much
+ * smaller resident footprint — the right tradeoff for a low-traffic daemon.
+ * Measured impact: see docs/configuration.md's memory section.
+ */
+const NODE_MEMORY_FLAGS = [
+  "--max-old-space-size=96",
+  "--max-semi-space-size=4",
+  "--optimize-for-size",
+];
+
 export function spawnChild(account: AccountConfig, opts: SpawnChildrenOptions): ChildHandle {
   let stopped = false;
   let proc: ChildProcess | null = null;
@@ -59,24 +75,31 @@ export function spawnChild(account: AccountConfig, opts: SpawnChildrenOptions): 
     appendLog(`${new Date().toISOString()} gateway starting child\n`);
     const logFd = fs.openSync(daemonLogPath, "a");
 
-    proc = spawn(process.execPath, ["--experimental-strip-types", "src/main.ts"], {
-      cwd: opts.appDir,
-      env: {
-        ...process.env,
-        WHATSAPP_MCP_DATA_DIR: dataDir,
-        EXPECTED_WA_NUMBER: account.expectedWaNumber,
-        MCP_TRANSPORT: "httpstream",
-        MCP_HOST: "127.0.0.1",
-        MCP_PORT: String(account.mcpPort),
-        MCP_AUTH_TOKEN: opts.internalToken,
-        QR_SERVER_HOST: "127.0.0.1",
-        QR_SERVER_PORT: String(account.qrPort),
-        STREAM_SERVER_HOST: "127.0.0.1",
-        STREAM_SERVER_PORT: String(account.streamPort),
-        ...SEND_GUARDRAILS,
+    proc = spawn(
+      process.execPath,
+      [...NODE_MEMORY_FLAGS, "--experimental-strip-types", "src/main.ts"],
+      {
+        cwd: opts.appDir,
+        env: {
+          ...process.env,
+          WHATSAPP_MCP_DATA_DIR: dataDir,
+          EXPECTED_WA_NUMBER: account.expectedWaNumber,
+          // local-rpc, not httpstream: only the gateway ever calls this child
+          // (gateway/mcp-client.ts), so it never needs a real MCP server — see
+          // mcp/local-rpc.ts.
+          MCP_TRANSPORT: "local-rpc",
+          MCP_HOST: "127.0.0.1",
+          MCP_PORT: String(account.mcpPort),
+          MCP_AUTH_TOKEN: opts.internalToken,
+          QR_SERVER_HOST: "127.0.0.1",
+          QR_SERVER_PORT: String(account.qrPort),
+          STREAM_SERVER_HOST: "127.0.0.1",
+          STREAM_SERVER_PORT: String(account.streamPort),
+          ...SEND_GUARDRAILS,
+        },
+        stdio: ["ignore", logFd, logFd],
       },
-      stdio: ["ignore", logFd, logFd],
-    });
+    );
     fs.closeSync(logFd);
 
     opts.logger.info({ account: account.name, pid: proc.pid }, "spawned account child");

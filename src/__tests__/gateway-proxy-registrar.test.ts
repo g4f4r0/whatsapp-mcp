@@ -1,8 +1,9 @@
 import type { FastMCP } from "fastmcp";
 import { describe, expect, it, vi } from "vitest";
-import { z } from "zod";
+import type { z } from "zod";
 import type { AccountClient } from "../gateway/mcp-client.ts";
-import { ProxyRegistrar } from "../gateway/proxy-registrar.ts";
+import { registerProxiedTools } from "../gateway/proxy-registrar.ts";
+import { TOOL_CONTRACTS } from "../mcp/tools/contracts.ts";
 
 interface RegisteredTool {
   name: string;
@@ -20,20 +21,24 @@ function fakeClient(callTool: AccountClient["callTool"]): () => AccountClient {
   return () => ({ callTool }) as unknown as AccountClient;
 }
 
-describe("gateway/ProxyRegistrar", () => {
+describe("gateway/registerProxiedTools", () => {
+  it("registers every tool contract", () => {
+    const { server, tools } = makeFakeServer();
+    registerProxiedTools(server, fakeClient(vi.fn()));
+
+    expect(tools.size).toBe(TOOL_CONTRACTS.length);
+    for (const contract of TOOL_CONTRACTS) {
+      expect(tools.has(contract.name)).toBe(true);
+    }
+  });
+
   it("extends the tool's own parameters with a required account field", () => {
     const { server, tools } = makeFakeServer();
-    const registrar = new ProxyRegistrar(server, fakeClient(vi.fn()));
-
-    registrar.addTool({
-      name: "get_chat",
-      parameters: z.object({ chat_jid: z.string() }),
-      execute: async () => "unused",
-    });
+    registerProxiedTools(server, fakeClient(vi.fn()));
 
     const registered = tools.get("get_chat")!;
     const parsed = registered.parameters.parse({ chat_jid: "x@g.us", account: "business" });
-    expect(parsed).toEqual({ chat_jid: "x@g.us", account: "business" });
+    expect(parsed).toEqual({ chat_jid: "x@g.us", account: "business", include_last_message: true });
     expect(() => registered.parameters.parse({ chat_jid: "x@g.us" })).toThrow();
   });
 
@@ -41,13 +46,7 @@ describe("gateway/ProxyRegistrar", () => {
     const { server, tools } = makeFakeServer();
     const callTool = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
     const getClient = vi.fn(fakeClient(callTool));
-    const registrar = new ProxyRegistrar(server, getClient);
-
-    registrar.addTool({
-      name: "get_chat",
-      parameters: z.object({ chat_jid: z.string() }),
-      execute: async () => "unused",
-    });
+    registerProxiedTools(server, getClient);
 
     const result = await tools
       .get("get_chat")!
@@ -64,29 +63,19 @@ describe("gateway/ProxyRegistrar", () => {
       isError: true,
       content: [{ type: "text", text: "Chat with JID x@g.us not found." }],
     });
-    const registrar = new ProxyRegistrar(server, fakeClient(callTool));
-
-    registrar.addTool({
-      name: "get_chat",
-      parameters: z.object({ chat_jid: z.string() }),
-      execute: async () => "unused",
-    });
+    registerProxiedTools(server, fakeClient(callTool));
 
     await expect(
       tools.get("get_chat")!.execute({ chat_jid: "x@g.us", account: "business" }),
     ).rejects.toThrow("Chat with JID x@g.us not found.");
   });
 
-  it("rejects a tool whose parameters aren't a z.object()", () => {
-    const { server } = makeFakeServer();
-    const registrar = new ProxyRegistrar(server, fakeClient(vi.fn()));
+  it("carries over tool-specific options like wait_for_messages' timeoutMs", () => {
+    const { server, tools } = makeFakeServer();
+    registerProxiedTools(server, fakeClient(vi.fn()));
 
-    expect(() =>
-      registrar.addTool({
-        name: "weird",
-        parameters: z.string(),
-        execute: async () => "unused",
-      }),
-    ).toThrow(/must be a z.object/);
+    expect((tools.get("wait_for_messages") as unknown as { timeoutMs: number }).timeoutMs).toBe(
+      TOOL_CONTRACTS.find((c) => c.name === "wait_for_messages")!.timeoutMs,
+    );
   });
 });

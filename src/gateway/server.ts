@@ -1,9 +1,12 @@
 /**
  * The gateway: one public MCP server fronting every WhatsApp account, plus a
- * QR pairing proxy. Every tool from src/mcp/tools/*.ts is reused unchanged
- * (via ProxyRegistrar) with a required `account` added; `list_accounts` is the
- * one gateway-native tool. Each account still runs as its own child process
- * (src/gateway/children.ts) — this file only wires the public surface.
+ * QR pairing proxy. Every tool contract from src/mcp/tools/contracts.ts is
+ * reused with a required `account` added (registerProxiedTools);
+ * `list_accounts` is the one gateway-native tool. Each account still runs as
+ * its own child process (src/gateway/children.ts) — this file only wires the
+ * public surface. Deliberately does not import src/mcp/tools/index.ts (the
+ * real tool implementations) — see proxy-registrar.ts's docblock for why
+ * that matters for the gateway's memory footprint.
  */
 
 import { randomBytes } from "node:crypto";
@@ -11,23 +14,10 @@ import { FastMCP } from "fastmcp";
 import type { Logger } from "pino";
 import { z } from "zod";
 import { createBearerAuthenticate } from "../mcp/bearer-auth.ts";
-import {
-  registerActionsTools,
-  registerChatsTools,
-  registerConnectionTools,
-  registerContactsTools,
-  registerGroupsTools,
-  registerMediaTools,
-  registerMessagesTools,
-  registerMonitoringTools,
-  registerSendingTools,
-  registerWebhooksTools,
-  type ToolDeps,
-} from "../mcp/tools/index.ts";
 import { type AccountConfig, defaultAccountsDir, loadAccounts } from "./accounts.ts";
 import { type ChildHandle, spawnChildren } from "./children.ts";
 import { AccountClient } from "./mcp-client.ts";
-import { ProxyRegistrar } from "./proxy-registrar.ts";
+import { registerProxiedTools } from "./proxy-registrar.ts";
 import { createQrProxy } from "./qr-proxy.ts";
 
 const SERVER_INSTRUCTIONS = `
@@ -137,18 +127,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     ),
   });
 
-  const deps: ToolDeps = { mcpLogger: opts.mcpLogger, waLogger: opts.waLogger };
-  const registrar = new ProxyRegistrar(server, getClient);
-  registerConnectionTools(registrar, deps);
-  registerContactsTools(registrar, deps);
-  registerMessagesTools(registrar, deps);
-  registerMonitoringTools(registrar, deps);
-  registerChatsTools(registrar, deps);
-  registerGroupsTools(registrar, deps);
-  registerSendingTools(registrar, deps);
-  registerActionsTools(registrar, deps);
-  registerMediaTools(registrar, deps);
-  registerWebhooksTools(registrar, deps);
+  registerProxiedTools(server, getClient);
   registerListAccounts(server, accounts);
 
   const mcpPort = Number(process.env.MCP_PORT ?? 39090);
