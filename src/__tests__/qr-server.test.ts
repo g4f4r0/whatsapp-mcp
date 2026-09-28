@@ -227,12 +227,16 @@ describe("createQrServer", () => {
     expect(body).toContain("disconnected");
   });
 
-  it("GET / shows connected message when connected", async () => {
+  it("GET / shows a plain success message when connected — no phone number, no status", async () => {
     state.status = "connected";
     state.user = "5531999999999@s.whatsapp.net";
     const res = await fetch(`${baseUrl}/`);
     const body = await res.text();
-    expect(body).toContain("5531999999999");
+    expect(body).toContain("WhatsApp connected");
+    expect(body).toContain("You can close this window.");
+    expect(body).not.toContain("5531999999999");
+    // No auto-refresh once paired — there's nothing left to wait for.
+    expect(body).not.toContain('<meta http-equiv="refresh"');
   });
 
   it("GET /qr.png returns 404 when no QR is pending", async () => {
@@ -282,12 +286,22 @@ describe("createQrServer", () => {
     expect(res.status).toBe(204);
   });
 
-  it("GET / shows Re-pair button when connected", async () => {
+  it("GET / no longer shows a re-pair button — less is more", async () => {
     state.status = "connected";
     state.user = "5531999999999@s.whatsapp.net";
     const res = await fetch(`${baseUrl}/`);
     const body = await res.text();
-    expect(body).toContain('action="/repair"');
-    expect(body).toContain("Re-pair device");
+    expect(body).not.toContain('action="/repair"');
+    expect(body).not.toContain("Re-pair");
+  });
+
+  it("GET / while a QR is pending shows only the QR image, nothing else", async () => {
+    state.status = "qr_pending";
+    state.qrCode = "2@abc123,def456,ghi789==,hex";
+    const res = await fetch(`${baseUrl}/`);
+    const body = await res.text();
+    expect(body).toContain('<img src="/qr.png"');
+    expect(body).not.toContain("Scan");
+    expect(body).not.toContain("Linked Devices");
   });
 });

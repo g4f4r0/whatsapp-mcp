@@ -42,23 +42,31 @@ export type QrServerOptions = {
   disconnectedGraceS?: number;
 };
 
+/**
+ * Less is more: the pairing page shows only the QR code while waiting, and
+ * only a plain success card once paired — nothing else (no status text, no
+ * re-pair button). The success card matches how BB itself renders an MCP
+ * OAuth success (apps/app/src/views/AuthCallbackView.tsx): a small bordered
+ * card, a checkmark, a title, one line of muted subtext.
+ */
 function renderHtml(state: ConnectionState): string {
-  const { status, user, qrCode } = state;
+  const { status, qrCode } = state;
 
+  const refreshing = status !== "connected";
   let body: string;
   if (status === "connected") {
-    body = `<h1>Connected</h1><p>Linked as <code>${escapeHtml(user ?? "?")}</code>. You can close this tab.</p>
-      <form method="post" action="/repair" onsubmit="return confirm('This will unlink WhatsApp and require a new QR scan. Continue?')">
-        <button type="submit">Re-pair device</button>
-      </form>`;
+    body = `
+      <div class="card">
+        <div class="row">
+          <svg class="check" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm-1.2 14.6-4.2-4.2 1.4-1.4 2.8 2.8 5.8-5.8 1.4 1.4-7.2 7.2Z" fill="currentColor"/></svg>
+          <h1>WhatsApp connected</h1>
+        </div>
+        <p>You can close this window.</p>
+      </div>`;
   } else if (status === "qr_pending" && qrCode) {
-    body = `<h1>Scan QR with WhatsApp</h1>
-      <img src="/qr.png" width="320" height="320" alt="WhatsApp QR" />
-      <p>Settings &rarr; Linked Devices &rarr; Link a Device</p>`;
-  } else if (status === "connecting" || status === "syncing") {
-    body = `<h1>${status}...</h1><p>Please wait.</p>`;
+    body = `<img src="/qr.png" width="320" height="320" alt="WhatsApp QR" />`;
   } else {
-    body = `<h1>disconnected</h1><p>Waiting for WhatsApp socket to initialize...</p>`;
+    body = `<p class="muted">${escapeHtml(status)}&hellip;</p>`;
   }
 
   return `<!doctype html>
@@ -66,18 +74,21 @@ function renderHtml(state: ConnectionState): string {
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<meta http-equiv="refresh" content="3" />
-<title>WhatsApp MCP — ${status}</title>
+${refreshing ? '<meta http-equiv="refresh" content="3" />' : ""}
+<title>WhatsApp</title>
 <style>
-body { font-family: system-ui, sans-serif; max-width: 28rem; margin: 3rem auto; padding: 0 1rem; text-align: center; }
-img { margin: 1rem auto; display: block; border: 1px solid #eee; padding: 0.5rem; background: #fff; }
-code { background: #f3f3f3; padding: 0.1rem 0.3rem; border-radius: 3px; }
+body { font-family: system-ui, sans-serif; display: flex; justify-content: center; padding: 3rem 1rem 0; background: #fff; color: #0a0a0a; }
+img { display: block; border: 1px solid #eee; padding: 0.5rem; background: #fff; }
+.muted { color: #71717a; font-size: 0.875rem; }
+.card { width: 100%; max-width: 24rem; border: 1px solid #e4e4e7; border-radius: 0.5rem; padding: 0.75rem 1rem; }
+.row { display: flex; align-items: center; gap: 0.5rem; }
+.check { flex-shrink: 0; }
+h1 { font-size: 0.875rem; font-weight: 600; margin: 0; }
+.card p { margin: 0.25rem 0 0; font-size: 0.75rem; color: #71717a; }
 </style>
 </head>
 <body>
 ${body}
-<hr />
-<small>status: ${status}</small>
 </body>
 </html>`;
 }
