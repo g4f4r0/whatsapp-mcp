@@ -13,10 +13,15 @@ import type { ToolRegistrar } from "../mcp/tools/types.ts";
 import type { AccountClient } from "./mcp-client.ts";
 
 export class ProxyRegistrar implements ToolRegistrar {
-  constructor(
-    private readonly server: FastMCP,
-    private readonly getClient: (account: string) => AccountClient,
-  ) {}
+  private readonly server: FastMCP;
+  private readonly getClient: (account: string) => AccountClient;
+
+  // Not parameter-property shorthand: unsupported under Node's
+  // --experimental-strip-types — see src/__tests__/strip-types.contract.test.ts.
+  constructor(server: FastMCP, getClient: (account: string) => AccountClient) {
+    this.server = server;
+    this.getClient = getClient;
+  }
 
   addTool<Params extends ToolParameters>(def: Tool<FastMCPSessionAuth, Params>): void {
     const baseParameters = def.parameters;

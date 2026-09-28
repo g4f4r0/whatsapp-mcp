@@ -54,8 +54,18 @@ describe("strip-types compatibility", () => {
   const TARGETS = [
     "transcribe/preprocess.ts",
     "transcribe/whisper.ts",
+    "transcribe/cache.ts",
     "describe/vision.ts",
     "xml.ts",
+    "process-run.ts",
+    "process-lifecycle.ts",
+    "mcp/bearer-auth.ts",
+    "mcp/tools/index.ts",
+    "gateway/accounts.ts",
+    "gateway/children.ts",
+    "gateway/mcp-client.ts",
+    "gateway/proxy-registrar.ts",
+    "gateway/qr-proxy.ts",
   ];
 
   for (const target of TARGETS) {

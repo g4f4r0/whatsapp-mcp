@@ -17,8 +17,14 @@ export interface AccountClientOptions {
 export class AccountClient {
   private client: Client | null = null;
   private connecting: Promise<Client> | null = null;
+  private readonly opts: AccountClientOptions;
 
-  constructor(private readonly opts: AccountClientOptions) {}
+  // Not a parameter-property shorthand: Node's --experimental-strip-types
+  // (strip-only mode, no real TS transform) does not support that syntax —
+  // see src/__tests__/strip-types.contract.test.ts.
+  constructor(opts: AccountClientOptions) {
+    this.opts = opts;
+  }
 
   private async connect(): Promise<Client> {
     if (this.client) return this.client;
