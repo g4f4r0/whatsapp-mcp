@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import * as Minio from "minio";
+import { resolveDataDir } from "./env-config.ts";
 
 export interface MediaStorageClient {
   putObject(
@@ -35,6 +38,42 @@ function getBucket(): string {
   return process.env.S3_BUCKET ?? "amiticia-media";
 }
 
+/**
+ * `MEDIA_STORAGE` picks where downloaded media lands. Default `local`: no S3/RustFS
+ * sidecar needed, media stays on the account's own data dir. `s3` opts back into the
+ * MinIO-compatible plane below (still gated by `S3_ENABLED` in main.ts for the bucket
+ * setup). Anything else reads as the default, same convention as env-config.ts.
+ */
+function mediaStorageMode(): "local" | "s3" {
+  return process.env.MEDIA_STORAGE?.trim().toLowerCase() === "s3" ? "s3" : "local";
+}
+
+/**
+ * Same JID sanitization `putMedia` has always used for its S3 key, reused as a
+ * path segment for local media (and, via transcribe/cache.ts, for the transcript
+ * sidecar file that lives next to it).
+ */
+export function sanitizeJidSegment(jid: string): string {
+  return jid.replace(/[^a-zA-Z0-9@._-]/g, "_");
+}
+
+function localMediaPath(chatJid: string, messageId: string, ext: string): string {
+  return path.join(resolveDataDir(), "media", sanitizeJidSegment(chatJid), `${messageId}.${ext}`);
+}
+
+/** Writes owner-only (0700 dirs, 0600 files) under `<data dir>/media/<chat_jid>/<message_id>.<ext>`. */
+async function putMediaLocal(params: {
+  chatJid: string;
+  messageId: string;
+  ext: string;
+  buffer: Buffer;
+}): Promise<{ key: string; url: string }> {
+  const filePath = localMediaPath(params.chatJid, params.messageId, params.ext);
+  await fs.promises.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  await fs.promises.writeFile(filePath, params.buffer, { mode: 0o600 });
+  return { key: filePath, url: `file://${filePath}` };
+}
+
 function getClient(): MediaStorageClient {
   if (_client) return _client;
   _client = new Minio.Client({
@@ -48,6 +87,13 @@ function getClient(): MediaStorageClient {
 }
 
 export function publicUrlFor(key: string): string {
+  // Local keys are absolute filesystem paths (see putMediaLocal); S3 keys are
+  // relative object keys like `t/default/...`. The leading "/" disambiguates,
+  // so this routes correctly regardless of the *current* MEDIA_STORAGE value
+  // (e.g. a key written under the old mode, looked up after a config change).
+  if (key.startsWith("/")) {
+    return `file://${key}`;
+  }
   const bucket = getBucket();
   const base = (process.env.MEDIA_PUBLIC_BASE_URL ?? `http://localhost:9000/${bucket}`).replace(
     /\/$/,
@@ -65,9 +111,14 @@ export async function putMedia(params: {
   buffer: Buffer;
 }): Promise<{ key: string; url: string }> {
   const { chatJid, messageId, ext, mimetype, buffer } = params;
+
+  if (mediaStorageMode() === "local") {
+    return putMediaLocal({ chatJid, messageId, ext, buffer });
+  }
+
   const tenantId = params.tenantId ?? process.env.TENANT_ID ?? "default";
   const bucket = getBucket();
-  const sanitizedJid = chatJid.replace(/[^a-zA-Z0-9@._-]/g, "_");
+  const sanitizedJid = sanitizeJidSegment(chatJid);
   const key = `t/${tenantId}/${sanitizedJid}/${messageId}.${ext}`;
 
   await getClient().putObject(bucket, key, buffer, buffer.length, { "Content-Type": mimetype });
@@ -104,6 +155,9 @@ export async function putUpload(params: {
  * the file when first downloading from WhatsApp.
  */
 export async function getMediaBytes(key: string): Promise<Buffer> {
+  if (key.startsWith("/")) {
+    return fs.promises.readFile(key);
+  }
   const bucket = getBucket();
   const stream = await getClient().getObject(bucket, key);
   const chunks: Buffer[] = [];

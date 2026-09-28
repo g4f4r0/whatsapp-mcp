@@ -7,6 +7,18 @@
  * `send-guard.ts`.
  */
 
+import path from "node:path";
+
+/**
+ * Resolves the per-account data directory with the same precedence every
+ * module that writes under it (whatsapp.ts, database.ts) already uses:
+ * `WHATSAPP_MCP_DATA_DIR` if set (the account launcher always sets it),
+ * otherwise repo-root for local dev.
+ */
+export function resolveDataDir(): string {
+  return process.env.WHATSAPP_MCP_DATA_DIR ?? path.join(import.meta.dirname, "..");
+}
+
 /** Parse a non-negative number, falling back on anything unusable. */
 export function readNonNegativeNumber(raw: string | undefined, fallback: number): number {
   if (raw === undefined || raw.trim() === "") return fallback;

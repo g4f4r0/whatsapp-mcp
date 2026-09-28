@@ -27,7 +27,11 @@
  * exceeds 24 MB after preprocess.
  */
 
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Logger } from "pino";
+import { type ProcessResult, ProcessSpawnError, runProcess } from "../process-run.ts";
 
 const TWENTY_FOUR_MB = 24 * 1024 * 1024;
 
@@ -65,8 +69,12 @@ const AUDIO_ROUTES = {
   },
 } as const;
 
-/** Not exported: nothing outside this module names a route. */
-type AudioProvider = keyof typeof AUDIO_ROUTES;
+/**
+ * `bb` is a fourth route, handled separately from `AUDIO_ROUTES` below: it shells
+ * out to `bb voice transcribe` instead of hitting an HTTP endpoint with an API
+ * key, so no provider key needs to reach this process. See `transcribeViaBb`.
+ */
+export type AudioProvider = keyof typeof AUDIO_ROUTES | "bb";
 
 export interface TranscribeResult {
   text: string;
@@ -91,12 +99,13 @@ export class TranscribeError extends Error {
   }
 }
 
-function resolveProvider(): AudioProvider {
+export function resolveProvider(): AudioProvider {
   const raw = process.env.AUDIO_PROVIDER?.trim().toLowerCase();
   if (!raw) return "openrouter";
+  if (raw === "bb") return "bb";
   if (raw in AUDIO_ROUTES) return raw as AudioProvider;
   throw new TranscribeError(
-    `AUDIO_PROVIDER="${raw}" is not a known route (${Object.keys(AUDIO_ROUTES).join(", ")}).`,
+    `AUDIO_PROVIDER="${raw}" is not a known route (bb, ${Object.keys(AUDIO_ROUTES).join(", ")}).`,
   );
 }
 
@@ -144,6 +153,11 @@ export async function transcribeAudio(opts: TranscribeOptions): Promise<Transcri
   }
 
   const provider = resolveProvider();
+  if (provider === "bb") {
+    throw new TranscribeError(
+      "AUDIO_PROVIDER=bb routes through transcribeViaBb, not transcribeAudio.",
+    );
+  }
   const route = AUDIO_ROUTES[provider];
   const apiKey = process.env[route.keyName];
   if (!apiKey) {
@@ -190,4 +204,90 @@ export async function transcribeAudio(opts: TranscribeOptions): Promise<Transcri
 
   logger?.debug({ provider, model, chars: text.length }, "whisper.transcribe done");
   return { text, model, provider, duration_s };
+}
+
+export interface TranscribeViaBbOptions {
+  /** Original (unprocessed) audio bytes — the bb route skips FLAC preprocessing. */
+  buffer: Buffer;
+  /** File extension for the staged temp file bb reads, e.g. "ogg". */
+  ext: string;
+  /** MIME type passed to `bb voice transcribe --type`. */
+  mimetype: string;
+  logger?: Logger;
+}
+
+export interface TranscribeViaBbResult {
+  text: string;
+  model: "bb";
+  provider: "bb";
+}
+
+/**
+ * Transcribe via the host's own `bb voice transcribe` CLI instead of an HTTP
+ * provider — no OpenRouter/Groq/OpenAI key ever reaches this process. Stages the
+ * original bytes to a temp file (the CLI takes a file path, not stdin) and skips
+ * the FLAC/16kHz preprocessing step: `bb voice transcribe` accepts the source
+ * format directly (verified against a real WhatsApp OGG/Opus voice note).
+ */
+export async function transcribeViaBb(
+  opts: TranscribeViaBbOptions,
+): Promise<TranscribeViaBbResult> {
+  const bbBin = process.env.BB_BIN_PATH?.trim();
+  if (!bbBin) {
+    throw new TranscribeError("BB_BIN_PATH is not set — cannot transcribe via AUDIO_PROVIDER=bb.");
+  }
+
+  const stageDir = await mkdtemp(join(tmpdir(), "wa-bb-voice-"));
+  const filePath = join(stageDir, `audio.${opts.ext || "bin"}`);
+  try {
+    await writeFile(filePath, opts.buffer);
+
+    opts.logger?.debug({ bbBin, mimetype: opts.mimetype }, "bb voice transcribe start");
+    const stdout = await runBb(bbBin, [
+      "voice",
+      "transcribe",
+      "--type",
+      opts.mimetype,
+      "--json",
+      filePath,
+    ]);
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(stdout);
+    } catch (err) {
+      throw new TranscribeError("bb voice transcribe --json did not return valid JSON.", err);
+    }
+    const text = (parsed as { text?: unknown } | null)?.text;
+    if (typeof text !== "string" || !text.trim()) {
+      // Same rule as readTranscript above: no text is a failure, not a silent "".
+      throw new TranscribeError("bb voice transcribe returned no text.");
+    }
+
+    opts.logger?.debug({ chars: text.length }, "bb voice transcribe done");
+    return { text: text.trim(), model: "bb", provider: "bb" };
+  } finally {
+    await rm(stageDir, { recursive: true, force: true }).catch(() => {
+      /* best effort */
+    });
+  }
+}
+
+/** Runs `bin args...` via the shared process runner, returns trimmed stdout. */
+async function runBb(bin: string, args: string[]): Promise<string> {
+  let result: ProcessResult;
+  try {
+    result = await runProcess(bin, args);
+  } catch (err) {
+    if (err instanceof ProcessSpawnError && err.code === "ENOENT") {
+      throw new TranscribeError(`bb binary not found at "${bin}". Set BB_BIN_PATH.`);
+    }
+    throw new TranscribeError(`bb spawn failed: ${(err as Error).message}`, err);
+  }
+  if (result.code !== 0) {
+    throw new TranscribeError(
+      `bb voice transcribe exited with code ${result.code}: ${result.stderr.toString("utf8")}`,
+    );
+  }
+  return result.stdout.toString("utf8").trim();
 }

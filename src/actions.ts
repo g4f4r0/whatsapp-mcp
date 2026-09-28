@@ -20,8 +20,9 @@ import {
 } from "./database.ts";
 import { describeImage } from "./describe/vision.ts";
 import { publicUrlFor, putMedia } from "./storage.ts";
+import { readCachedTranscript, writeCachedTranscript } from "./transcribe/cache.ts";
 import { toFlacMono16k } from "./transcribe/preprocess.ts";
-import { transcribeAudio } from "./transcribe/whisper.ts";
+import { resolveProvider, transcribeAudio, transcribeViaBb } from "./transcribe/whisper.ts";
 import { downloadMedia, socketState } from "./whatsapp.ts";
 import { renderImageDescription, renderTranscription } from "./xml.ts";
 
@@ -178,20 +179,32 @@ export async function executeDownloadMedia(waLogger: Logger, params: DownloadMed
   const textBlock = { type: "text" as const, text: metaText };
 
   // Audio + transcribe → return XML transcription instead of audio bytes.
+  // A voice note is only ever transcribed once: the sidecar .txt cache (next to
+  // the downloaded audio) is checked first, regardless of provider.
   if (shouldTranscribe) {
-    const flac = await toFlacMono16k(buffer);
-    const result = await transcribeAudio({
-      buffer: flac,
-      filename: `${message_id}.flac`,
-      logger: waLogger,
-    });
-    const xml = renderTranscription({
-      message_id,
-      chat_jid,
-      model: result.model,
-      duration_s: result.duration_s,
-      text: result.text,
-    });
+    const cached = await readCachedTranscript(chat_jid, message_id);
+    let text: string;
+    let model: string;
+    if (cached) {
+      text = cached;
+      model = "cached";
+    } else if (resolveProvider() === "bb") {
+      const result = await transcribeViaBb({ buffer, ext, mimetype, logger: waLogger });
+      text = result.text;
+      model = result.model;
+      await writeCachedTranscript(chat_jid, message_id, text);
+    } else {
+      const flac = await toFlacMono16k(buffer);
+      const result = await transcribeAudio({
+        buffer: flac,
+        filename: `${message_id}.flac`,
+        logger: waLogger,
+      });
+      text = result.text;
+      model = result.model;
+      await writeCachedTranscript(chat_jid, message_id, text);
+    }
+    const xml = renderTranscription({ message_id, chat_jid, model, text });
     return {
       content: [{ type: "text" as const, text: xml }, resLink, textBlock],
     };

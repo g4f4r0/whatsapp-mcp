@@ -51,6 +51,13 @@ vi.mock("../transcribe/preprocess.ts", () => ({
 
 vi.mock("../transcribe/whisper.ts", () => ({
   transcribeAudio: vi.fn(),
+  transcribeViaBb: vi.fn(),
+  resolveProvider: vi.fn().mockReturnValue("openrouter"),
+}));
+
+vi.mock("../transcribe/cache.ts", () => ({
+  readCachedTranscript: vi.fn().mockResolvedValue(null),
+  writeCachedTranscript: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../describe/vision.ts", () => ({
@@ -75,8 +82,9 @@ import { executeDownloadMedia } from "../actions.ts";
 import { getMessageById, updateMessageMediaObjectKey } from "../database.ts";
 import { describeImage } from "../describe/vision.ts";
 import { getMediaBytes, publicUrlFor, putMedia } from "../storage.ts";
+import { readCachedTranscript, writeCachedTranscript } from "../transcribe/cache.ts";
 import { toFlacMono16k } from "../transcribe/preprocess.ts";
-import { transcribeAudio } from "../transcribe/whisper.ts";
+import { resolveProvider, transcribeAudio, transcribeViaBb } from "../transcribe/whisper.ts";
 import { downloadMedia } from "../whatsapp.ts";
 
 const logger = pino({ level: "silent" });
@@ -114,6 +122,8 @@ describe("executeDownloadMedia", () => {
       mimetype: "image/jpeg",
       ext: "jpg",
     });
+    vi.mocked(resolveProvider).mockReturnValue("openrouter");
+    vi.mocked(readCachedTranscript).mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -470,6 +480,64 @@ describe("executeDownloadMedia", () => {
     expect(getMediaBytes).toHaveBeenCalledWith("t/default/5511@s.whatsapp.net/msg-001.ogg");
     expect(transcribeAudio).toHaveBeenCalledOnce();
     expect((result.content[0] as any).text).toContain("<transcription");
+  });
+
+  // ── AUDIO_PROVIDER=bb + transcript sidecar cache ──────────────────────
+
+  /** Local media plane's shape for a freshly-downloaded audio/ogg message. */
+  function mockLocalAudioDownload() {
+    vi.mocked(downloadMedia).mockResolvedValue({
+      buffer: Buffer.from("ogg-bytes"),
+      mimetype: "audio/ogg",
+      ext: "ogg",
+    });
+    const key = "/data/business/media/5511@s.whatsapp.net/msg-001.ogg";
+    vi.mocked(putMedia).mockResolvedValue({ key, url: `file://${key}` });
+  }
+
+  it("AUDIO_PROVIDER=bb transcribes via bb instead of ffmpeg/whisper", async () => {
+    vi.mocked(resolveProvider).mockReturnValue("bb");
+    mockLocalAudioDownload();
+    vi.mocked(transcribeViaBb).mockResolvedValue({
+      text: "oi, tudo bem?",
+      model: "bb",
+      provider: "bb",
+    });
+    const msg = makeMediaMessage({ mimetype: "audio/ogg", media_type: "audio", file_length: 512 });
+    vi.mocked(getMessageById).mockReturnValue(msg as any);
+
+    const result = await executeDownloadMedia(logger, {
+      message_id: "msg-001",
+      chat_jid: "5511@s.whatsapp.net",
+    });
+
+    expect(toFlacMono16k).not.toHaveBeenCalled();
+    expect(transcribeAudio).not.toHaveBeenCalled();
+    expect(transcribeViaBb).toHaveBeenCalledOnce();
+    expect((result.content[0] as any).text).toContain("oi, tudo bem?");
+    expect(writeCachedTranscript).toHaveBeenCalledWith(
+      "5511@s.whatsapp.net",
+      "msg-001",
+      "oi, tudo bem?",
+    );
+  });
+
+  it("a cached transcript skips transcription entirely, on any provider", async () => {
+    vi.mocked(readCachedTranscript).mockResolvedValue("already transcribed");
+    mockLocalAudioDownload();
+    const msg = makeMediaMessage({ mimetype: "audio/ogg", media_type: "audio", file_length: 512 });
+    vi.mocked(getMessageById).mockReturnValue(msg as any);
+
+    const result = await executeDownloadMedia(logger, {
+      message_id: "msg-001",
+      chat_jid: "5511@s.whatsapp.net",
+    });
+
+    expect(transcribeAudio).not.toHaveBeenCalled();
+    expect(transcribeViaBb).not.toHaveBeenCalled();
+    expect(writeCachedTranscript).not.toHaveBeenCalled();
+    expect((result.content[0] as any).text).toContain("already transcribed");
+    expect((result.content[0] as any).text).toContain('model="cached"');
   });
 
   // G3 — file_length === MEDIA_INLINE_MAX_BYTES skips inline (source uses strict <)

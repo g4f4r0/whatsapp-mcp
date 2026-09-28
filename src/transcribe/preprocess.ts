@@ -25,10 +25,10 @@
  * error message pointing at the request rather than the file.
  */
 
-import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { type ProcessResult, ProcessSpawnError, runProcess } from "../process-run.ts";
 
 // "Invalid data found when processing input" is too generic — ffmpeg also
 // emits it as a recoverable warning on some valid containers. The two markers
@@ -64,66 +64,55 @@ export async function toFlacMono16k(input: Buffer): Promise<Buffer> {
   try {
     await writeFile(inputPath, input);
 
-    await new Promise<void>((resolve, reject) => {
-      const args = [
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-i",
-        inputPath,
-        "-ar",
-        "16000",
-        "-ac",
-        "1",
-        "-c:a",
-        "flac",
-        "-f",
-        "flac",
-        "-y",
-        outputPath,
-      ];
+    const args = [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-i",
+      inputPath,
+      "-ar",
+      "16000",
+      "-ac",
+      "1",
+      "-c:a",
+      "flac",
+      "-f",
+      "flac",
+      "-y",
+      outputPath,
+    ];
 
-      const proc = spawn(ffmpegBin, args, { stdio: ["ignore", "ignore", "pipe"] });
+    let result: ProcessResult;
+    try {
+      result = await runProcess(ffmpegBin, args, { captureStdout: false });
+    } catch (err) {
+      if (err instanceof ProcessSpawnError && err.code === "ENOENT") {
+        throw new FfmpegError(
+          `ffmpeg binary not found at "${ffmpegBin}". Install ffmpeg or set FFMPEG_BIN.`,
+        );
+      }
+      throw new FfmpegError(`ffmpeg spawn failed: ${(err as Error).message}`);
+    }
 
-      const stderrChunks: Buffer[] = [];
-
-      proc.stderr.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
-
-      proc.on("error", (err: NodeJS.ErrnoException) => {
-        if (err.code === "ENOENT") {
-          reject(
-            new FfmpegError(
-              `ffmpeg binary not found at "${ffmpegBin}". Install ffmpeg or set FFMPEG_BIN.`,
-            ),
-          );
-          return;
-        }
-        reject(new FfmpegError(`ffmpeg spawn failed: ${err.message}`));
-      });
-
-      proc.on("close", (code) => {
-        const stderr = Buffer.concat(stderrChunks).toString("utf8");
-        if (code !== 0) {
-          reject(new FfmpegError(`ffmpeg exited with code ${code}`, stderr, code ?? undefined));
-          return;
-        }
-        // Defense-in-depth: ffmpeg sometimes exits 0 after a partial demux,
-        // emitting a tiny silent FLAC. Surface those as FfmpegError instead of
-        // letting Whisper reject downstream with a misleading "audio too short".
-        const demuxFailed = DEMUX_ERROR_MARKERS.some((m) => stderr.includes(m));
-        if (demuxFailed) {
-          reject(
-            new FfmpegError(
-              "ffmpeg exited 0 but stderr reports a demux failure — input is likely corrupt or its container is unsupported",
-              stderr,
-              0,
-            ),
-          );
-          return;
-        }
-        resolve();
-      });
-    });
+    const stderr = result.stderr.toString("utf8");
+    if (result.code !== 0) {
+      throw new FfmpegError(
+        `ffmpeg exited with code ${result.code}`,
+        stderr,
+        result.code ?? undefined,
+      );
+    }
+    // Defense-in-depth: ffmpeg sometimes exits 0 after a partial demux,
+    // emitting a tiny silent FLAC. Surface those as FfmpegError instead of
+    // letting Whisper reject downstream with a misleading "audio too short".
+    const demuxFailed = DEMUX_ERROR_MARKERS.some((m) => stderr.includes(m));
+    if (demuxFailed) {
+      throw new FfmpegError(
+        "ffmpeg exited 0 but stderr reports a demux failure — input is likely corrupt or its container is unsupported",
+        stderr,
+        0,
+      );
+    }
 
     return await readFile(outputPath);
   } finally {

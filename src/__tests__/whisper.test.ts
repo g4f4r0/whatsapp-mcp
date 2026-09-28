@@ -11,12 +11,21 @@
  * Every test blanks ALL provider keys first. Asserting "it went to OpenRouter"
  * is worthless if a leftover GROQ_API_KEY could have produced the same result.
  */
+import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { TranscribeError, transcribeAudio } from "../transcribe/whisper.ts";
+vi.mock("node:child_process", () => ({ spawn: vi.fn() }));
+
+import { spawn } from "node:child_process";
+import {
+  resolveProvider,
+  TranscribeError,
+  transcribeAudio,
+  transcribeViaBb,
+} from "../transcribe/whisper.ts";
 
 const KEYS = ["OPENROUTER_API_KEY", "GROQ_API_KEY", "OPENAI_API_KEY"] as const;
-const VARS = [...KEYS, "AUDIO_PROVIDER", "WHISPER_MODEL"] as const;
+const VARS = [...KEYS, "AUDIO_PROVIDER", "WHISPER_MODEL", "BB_BIN_PATH"] as const;
 
 function clearEnv() {
   for (const v of VARS) delete process.env[v];
@@ -200,5 +209,103 @@ describe("transcribeAudio", () => {
     const tooBig = Buffer.alloc(24 * 1024 * 1024 + 1);
     await expect(transcribeAudio({ buffer: tooBig })).rejects.toThrow(/24 MB/);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("resolveProvider returns 'bb' for AUDIO_PROVIDER=bb, no key required", () => {
+    process.env.AUDIO_PROVIDER = "bb";
+    expect(resolveProvider()).toBe("bb");
+  });
+
+  it("refuses to run the HTTP path when AUDIO_PROVIDER=bb", async () => {
+    process.env.AUDIO_PROVIDER = "bb";
+    await expect(transcribeAudio({ buffer: Buffer.from("x") })).rejects.toBeInstanceOf(
+      TranscribeError,
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+// ── transcribeViaBb: shells out to `bb voice transcribe`, no provider key ──
+
+describe("transcribeViaBb", () => {
+  const spawnMock = vi.mocked(spawn);
+
+  /** Fake ChildProcess: emits the given stdout/exit on next tick. */
+  function fakeChild(stdout: string, exitCode: number, stderr = "") {
+    const proc: any = new EventEmitter();
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    queueMicrotask(() => {
+      if (stdout) proc.stdout.emit("data", Buffer.from(stdout));
+      if (stderr) proc.stderr.emit("data", Buffer.from(stderr));
+      proc.emit("close", exitCode);
+    });
+    return proc;
+  }
+
+  beforeEach(() => {
+    clearEnv();
+    spawnMock.mockReset();
+  });
+
+  afterEach(() => {
+    clearEnv();
+  });
+
+  it("throws without spawning when BB_BIN_PATH is unset", async () => {
+    await expect(
+      transcribeViaBb({ buffer: Buffer.from("x"), ext: "ogg", mimetype: "audio/ogg" }),
+    ).rejects.toThrow(/BB_BIN_PATH/);
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("invokes bb voice transcribe --type <mimetype> --json <file> and parses the text", async () => {
+    process.env.BB_BIN_PATH = "/opt/bb/bb";
+    spawnMock.mockImplementation(() => fakeChild(JSON.stringify({ text: "oi, tudo bem?" }), 0));
+
+    const result = await transcribeViaBb({
+      buffer: Buffer.from("ogg-bytes"),
+      ext: "ogg",
+      mimetype: "audio/ogg",
+    });
+
+    expect(result).toEqual({ text: "oi, tudo bem?", model: "bb", provider: "bb" });
+    const [bin, args] = spawnMock.mock.calls[0] as unknown as [string, string[]];
+    expect(bin).toBe("/opt/bb/bb");
+    expect(args).toEqual([
+      "voice",
+      "transcribe",
+      "--type",
+      "audio/ogg",
+      "--json",
+      expect.stringMatching(/audio\.ogg$/),
+    ]);
+  });
+
+  it("throws on a non-zero exit, surfacing stderr", async () => {
+    process.env.BB_BIN_PATH = "/opt/bb/bb";
+    spawnMock.mockImplementation(() => fakeChild("", 1, "boom"));
+
+    await expect(
+      transcribeViaBb({ buffer: Buffer.from("x"), ext: "ogg", mimetype: "audio/ogg" }),
+    ).rejects.toThrow(/boom/);
+  });
+
+  it("throws on unparsable JSON instead of guessing", async () => {
+    process.env.BB_BIN_PATH = "/opt/bb/bb";
+    spawnMock.mockImplementation(() => fakeChild("not json", 0));
+
+    await expect(
+      transcribeViaBb({ buffer: Buffer.from("x"), ext: "ogg", mimetype: "audio/ogg" }),
+    ).rejects.toBeInstanceOf(TranscribeError);
+  });
+
+  it("throws on an empty transcript instead of returning silence", async () => {
+    process.env.BB_BIN_PATH = "/opt/bb/bb";
+    spawnMock.mockImplementation(() => fakeChild(JSON.stringify({ text: "  " }), 0));
+
+    await expect(
+      transcribeViaBb({ buffer: Buffer.from("x"), ext: "ogg", mimetype: "audio/ogg" }),
+    ).rejects.toBeInstanceOf(TranscribeError);
   });
 });

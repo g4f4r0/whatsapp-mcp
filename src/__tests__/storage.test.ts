@@ -1,3 +1,6 @@
+import { readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -39,6 +42,8 @@ const envKeys = [
   "S3_PORT",
   "MEDIA_PUBLIC_BASE_URL",
   "TENANT_ID",
+  "MEDIA_STORAGE",
+  "WHATSAPP_MCP_DATA_DIR",
 ];
 
 describe("storage", () => {
@@ -51,6 +56,9 @@ describe("storage", () => {
     process.env.TENANT_ID = "default";
     process.env.S3_ENDPOINT = "localhost";
     process.env.S3_PORT = "9000";
+    // Most of this file exercises the S3 plane explicitly; local-mode behavior
+    // (the default — see storage.ts's mediaStorageMode) has its own describe block.
+    process.env.MEDIA_STORAGE = "s3";
   });
 
   afterEach(() => {
@@ -361,6 +369,90 @@ describe("storage", () => {
 
       expect(getObject).toHaveBeenCalledWith("test-bucket", "t/default/x/y.ogg");
       expect(out.toString()).toBe("hello world");
+    });
+  });
+
+  // ── local storage (MEDIA_STORAGE=local, the default) ─────────────────
+
+  describe("local mode", () => {
+    let dataDir: string;
+
+    beforeEach(() => {
+      process.env.MEDIA_STORAGE = "local";
+      dataDir = path.join(
+        tmpdir(),
+        `wa-storage-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      );
+      process.env.WHATSAPP_MCP_DATA_DIR = dataDir;
+    });
+
+    afterEach(async () => {
+      await rm(dataDir, { recursive: true, force: true });
+    });
+
+    it("writes under <data dir>/media/<chat_jid>/<message_id>.<ext>", async () => {
+      const { key } = await putMedia({
+        chatJid: "5511999999999@s.whatsapp.net",
+        messageId: "msg123",
+        ext: "ogg",
+        mimetype: "audio/ogg",
+        buffer: Buffer.from("audio bytes"),
+      });
+
+      expect(key).toBe(path.join(dataDir, "media", "5511999999999@s.whatsapp.net", "msg123.ogg"));
+      expect((await readFile(key)).toString()).toBe("audio bytes");
+    });
+
+    it("sanitizes special characters in the JID directory segment", async () => {
+      const { key } = await putMedia({
+        chatJid: "group+abc!@g.us",
+        messageId: "msg999",
+        ext: "mp4",
+        mimetype: "video/mp4",
+        buffer: Buffer.from("fake"),
+      });
+
+      expect(key).toBe(path.join(dataDir, "media", "group_abc_@g.us", "msg999.mp4"));
+    });
+
+    it("returns a file:// url", async () => {
+      const { key, url } = await putMedia({
+        chatJid: "123@s.whatsapp.net",
+        messageId: "abc",
+        ext: "jpg",
+        mimetype: "image/jpeg",
+        buffer: Buffer.from("x"),
+      });
+
+      expect(url).toBe(`file://${key}`);
+    });
+
+    it("does not call the S3 client", async () => {
+      const mock = makeMockClient();
+      setStorageClient(mock as MediaStorageClient);
+
+      await putMedia({
+        chatJid: "123@s.whatsapp.net",
+        messageId: "abc",
+        ext: "jpg",
+        mimetype: "image/jpeg",
+        buffer: Buffer.from("x"),
+      });
+
+      expect(mock.putObject).not.toHaveBeenCalled();
+    });
+
+    it("a second download reuses the same file (no re-write needed to read it back)", async () => {
+      const { key } = await putMedia({
+        chatJid: "123@s.whatsapp.net",
+        messageId: "abc",
+        ext: "jpg",
+        mimetype: "image/jpeg",
+        buffer: Buffer.from("first"),
+      });
+
+      const bytes = await getMediaBytes(key);
+      expect(bytes.toString()).toBe("first");
     });
   });
 });
